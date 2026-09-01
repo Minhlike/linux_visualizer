@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Linux Observatory</title>
+  <rect width="512" height="512" rx="104" fill="#11130f"/>
+  <circle cx="256" cy="256" r="154" fill="none" stroke="#bfee35" stroke-width="28"/>
+  <circle cx="256" cy="256" r="42" fill="#bfee35"/>
+  <path d="M256 102v112M256 298v112M102 256h112M298 256h112" stroke="#bfee35" stroke-width="28" stroke-linecap="square"/>
+  <path d="M151 151l78 78M283 283l78 78M361 151l-78 78M229 283l-78 78" stroke="#4d5b3a" stroke-width="18"/>
+</svg>

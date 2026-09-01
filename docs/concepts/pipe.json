@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0.0",
+  "concept": "anonymous_pipe",
+  "linux_definition": "A kernel-resident unidirectional byte-stream IPC object exposed to processes through file descriptors referring to its read and write ends.",
+  "observable_evidence": [
+    {
+      "source": "tracepoint",
+      "observation": "Process creation and execution events identify the command participants when the configured kernel exposes the required events.",
+      "supports": "Process identities and lifecycle ordering."
+    },
+    {
+      "source": "procfs",
+      "observation": "/proc/<pid>/fd links identify pipe endpoints sharing a pipe inode label while the descriptors exist.",
+      "supports": "Descriptor-to-pipe relationships at sampled instants."
+    },
+    {
+      "source": "synthetic_replay",
+      "observation": "A deterministic teaching trace can exercise graph and projection behavior without claiming live observation.",
+      "supports": "Software behavior only, not empirical Linux execution."
+    }
+  ],
+  "graph_semantics": [
+    "A process HAS_FD an FD entry.",
+    "An FD entry REFERS_TO a pipe endpoint.",
+    "The read endpoint and write endpoint are roles of one anonymous pipe object.",
+    "Writes may precede reads in the event timeline without implying persistent file storage."
+  ],
+  "visual_metaphor": "A directional industrial conduit connecting separately labelled read and write endpoints.",
+  "valid_interpretations": [
+    "Bytes written at the write end can be read in order from the read end.",
+    "Multiple descriptors may refer to endpoints after fork or duplication.",
+    "The conduit is a projection of relationships and event flow."
+  ],
+  "forbidden_interpretations": [
+    "The pipe is a persistent regular file.",
+    "The pipe belongs exclusively to one process.",
+    "Bytes physically travel through an industrial tube.",
+    "One write necessarily maps to one read or preserves application message boundaries.",
+    "The visualization proves an unobserved syscall or scheduling order."
+  ],
+  "abstraction_omissions": [
+    "Kernel pipe buffer implementation and capacity changes.",
+    "Blocking, wake-up, signal, partial-write, and atomicity details unless directly represented by evidence.",
+    "Shell implementation differences and descriptor-close timing not present in the trace."
+  ],
+  "confidence": {
+    "level": "inferred",
+    "rationale": "The P0 contract is grounded in Linux interfaces but has not yet been exercised against the project specimen; synthetic replay must be labelled separately from live evidence."
+  }
+}

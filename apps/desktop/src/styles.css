@@ -1,0 +1,240 @@
+:root {
+  color: #e8ebdf;
+  background: #11130f;
+  font-family: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(rgba(191, 238, 53, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(191, 238, 53, 0.035) 1px, transparent 1px),
+    #11130f;
+  background-size: 42px 42px;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.observatory-shell {
+  width: min(1280px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 32px 0 20px;
+}
+
+.masthead,
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-top: 1px solid #41483a;
+  border-bottom: 1px solid #41483a;
+}
+
+.masthead {
+  padding: 20px 0;
+}
+
+.eyebrow,
+.panel-index,
+.status-chip,
+dt,
+footer {
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.eyebrow,
+.panel-index {
+  margin: 0 0 10px;
+  color: #bfee35;
+  font-size: 0.75rem;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: clamp(2rem, 5vw, 4.8rem);
+  line-height: 0.94;
+  letter-spacing: -0.055em;
+}
+
+.status-chip {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  color: #11130f;
+  background: #bfee35;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+  min-height: 470px;
+  border-bottom: 1px solid #41483a;
+}
+
+.mission-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 64px 8vw 48px 0;
+  border-right: 1px solid #41483a;
+}
+
+.mission-panel h2 {
+  max-width: 780px;
+  margin-bottom: 24px;
+  font-size: clamp(2rem, 4vw, 4.2rem);
+  line-height: 1.02;
+  letter-spacing: -0.045em;
+}
+
+.mission-panel > p:last-child {
+  max-width: 640px;
+  color: #aeb6a4;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.truth-panel {
+  display: grid;
+  grid-template-rows: repeat(4, 1fr);
+}
+
+.truth-panel article {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 20px;
+  align-items: center;
+  padding: 24px 0 24px 36px;
+  border-bottom: 1px solid #30362c;
+}
+
+.truth-panel article:last-child {
+  border-bottom: 0;
+}
+
+.truth-panel article > span {
+  color: #626d59;
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+}
+
+.truth-panel h3 {
+  margin-bottom: 6px;
+  color: #bfee35;
+  font-family: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+}
+
+.truth-panel p {
+  margin-bottom: 0;
+  color: #aeb6a4;
+  line-height: 1.4;
+}
+
+.contract-card {
+  display: grid;
+  grid-template-columns: 0.65fr 1.35fr;
+  gap: 64px;
+  padding: 48px 0;
+  border-bottom: 1px solid #41483a;
+}
+
+.contract-card h2 {
+  margin: 0;
+  font-size: 2rem;
+}
+
+.contract-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  margin: 0;
+  background: #41483a;
+}
+
+.contract-card dl > div {
+  padding: 20px;
+  background: #181b16;
+}
+
+dt {
+  margin-bottom: 16px;
+  color: #bfee35;
+  font-size: 0.68rem;
+}
+
+dd {
+  margin: 0;
+  color: #c5cabd;
+  line-height: 1.5;
+}
+
+footer {
+  padding: 16px 0;
+  border-top: 0;
+  color: #7c8773;
+  font-size: 0.68rem;
+}
+
+@media (max-width: 820px) {
+  .observatory-shell {
+    width: min(100% - 28px, 720px);
+  }
+
+  .masthead,
+  footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .hero-grid,
+  .contract-card {
+    grid-template-columns: 1fr;
+  }
+
+  .mission-panel {
+    min-height: 420px;
+    padding-right: 0;
+    border-right: 0;
+    border-bottom: 1px solid #41483a;
+  }
+
+  .truth-panel article {
+    padding-left: 0;
+  }
+
+  .contract-card dl {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

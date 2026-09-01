@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://linux-observatory.local/schemas/fidelity-contract.schema.json",
+  "title": "Linux Observatory Semantic Fidelity Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "concept",
+    "linux_definition",
+    "observable_evidence",
+    "graph_semantics",
+    "visual_metaphor",
+    "valid_interpretations",
+    "forbidden_interpretations",
+    "abstraction_omissions",
+    "confidence"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "concept": { "type": "string", "minLength": 1 },
+    "linux_definition": { "type": "string", "minLength": 1 },
+    "observable_evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/evidence" } },
+    "graph_semantics": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "visual_metaphor": { "type": "string", "minLength": 1 },
+    "valid_interpretations": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "forbidden_interpretations": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "abstraction_omissions": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "confidence": { "$ref": "#/$defs/confidence" }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "observation", "supports"],
+      "properties": {
+        "source": { "enum": ["procfs", "sysfs", "tracepoint", "ftrace", "process_exit", "synthetic_replay"] },
+        "observation": { "type": "string", "minLength": 1 },
+        "supports": { "type": "string", "minLength": 1 }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "rationale"],
+      "properties": {
+        "level": { "enum": ["observed", "inferred", "approximation", "unknown"] },
+        "rationale": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

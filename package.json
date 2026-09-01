@@ -1,0 +1,24 @@
+{
+  "name": "linux-observatory",
+  "private": true,
+  "version": "0.0.1",
+  "packageManager": "npm@11.17.0",
+  "workspaces": [
+    "apps/desktop",
+    "camera-director",
+    "learning-ui",
+    "renderer"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @linux-observatory/desktop",
+    "check": "npm run check:boundaries && npm run check:rust && npm run check:frontend",
+    "check:boundaries": "node tools/check-boundaries.mjs",
+    "check:frontend": "npm run check --workspace @linux-observatory/desktop",
+    "check:rust": "cargo check --workspace --exclude linux-observatory-desktop",
+    "context-pack": "node tools/context_pack/index.mjs",
+    "tauri:check": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "tauri:dev": "npm run tauri --workspace @linux-observatory/desktop -- dev",
+    "test": "cargo test --workspace --exclude linux-observatory-desktop && node --test tools/*.test.mjs",
+    "verify": "npm run check && npm test && npm run build"
+  }
+}

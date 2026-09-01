@@ -1,0 +1,10 @@
+{
+  "name": "@linux-observatory/learning-ui",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": "./src/index.tsx",
+  "peerDependencies": {
+    "react": "^19.2.0"
+  }
+}
