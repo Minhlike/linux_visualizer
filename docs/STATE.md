@@ -8,7 +8,7 @@ Updated: 2026-09-01
 - Architecture boundaries and operating memory protocol defined.
 - Rust semantic/evidence/fidelity foundations scaffolded with tests.
 - Minimal Tauri 2 + Vite + React composition shell scaffolded.
-- CI and reproducible local verification commands added.
+- Reproducible local verification commands and an MSVC CI template added.
 - Pipe semantic fidelity contract encoded and validated.
 - Local production frontend and native Tauri `--no-bundle` release builds passed.
 - Desktop/mobile browser inspection passed with no console errors or horizontal overflow.
@@ -29,8 +29,7 @@ Updated: 2026-09-01
 ## Blockers / constraints
 
 - QEMU is not installed on the current Windows machine; it is not required before P6.
-- The official Tauri Windows prerequisite recommends MSVC and Visual Studio C++ Build Tools. This machine lacks `link.exe`, but the installed GNU Rust toolchain completed a native release build; CI is configured for MSVC, with execution pending a workflow-authorized push.
-- GitHub rejected the workflow-containing push because the current OAuth token lacks the `workflow` scope. Local commits are intact; publishing requires the repository owner to authorize that scope or provide an already-trusted SSH path.
+- The official Tauri Windows prerequisite recommends MSVC and Visual Studio C++ Build Tools. This machine lacks `link.exe`, but the installed GNU Rust toolchain completed a native release build. The MSVC workflow is preserved under `ci/` as an inactive template because the current GitHub token cannot publish active workflow files.
 - The project license is intentionally undecided; repository code is currently `UNLICENSED`.
 - No empirical learning or frame-rate claim exists yet. P1 has no 3D scene and no live Linux evidence.
 
