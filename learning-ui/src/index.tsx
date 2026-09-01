@@ -1,9 +1,4 @@
-const modules = [
-  ["OBSERVE", "Runtime evidence with source and confidence"],
-  ["MODEL", "Renderer-independent Linux semantic graph"],
-  ["CONSTRAIN", "Valid, forbidden, and omitted interpretations"],
-  ["PROJECT", "City, truth graph, and dual views"],
-] as const;
+import type { FormEvent, ReactNode } from "react";
 
 export interface ReplayFrameView {
   readonly sequence: number;
@@ -12,170 +7,208 @@ export interface ReplayFrameView {
   readonly summary: string;
   readonly nodeCount: number;
   readonly edgeCount: number;
+  readonly focusNodeIds: readonly string[];
 }
 
 export interface ReplayViewModel {
-  readonly available: boolean;
   readonly status: "idle" | "loading" | "ready" | "error";
-  readonly title: string | undefined;
-  readonly caveat: string | undefined;
+  readonly title: string;
+  readonly caveat: string;
   readonly current: ReplayFrameView | undefined;
   readonly frameIndex: number;
   readonly frameCount: number;
+  readonly playing: boolean;
   readonly error: string | undefined;
 }
 
-export interface LearningShellProps {
-  readonly replay: ReplayViewModel;
-  readonly onLoadReplay: () => void;
-  readonly onMoveReplay: (delta: -1 | 1) => void;
+export interface InfoCardView {
+  readonly name: string;
+  readonly type: string;
+  readonly visualMetaphor: string;
+  readonly technicalReality: string;
+  readonly limitations: string;
 }
 
+export interface TelemetryView {
+  readonly backend: "initializing" | "webgpu" | "webgl2";
+  readonly fps: number | undefined;
+  readonly frameTimeMs: number | undefined;
+  readonly drawCalls: number | undefined;
+  readonly visibleObjects: number | undefined;
+}
+
+export interface LearningShellProps {
+  readonly scene: ReactNode;
+  readonly replay: ReplayViewModel;
+  readonly infoCard: InfoCardView;
+  readonly selectedEntity: string;
+  readonly viewMode: "city" | "truth" | "dual";
+  readonly telemetry: TelemetryView;
+  readonly terminalOpen: boolean;
+  readonly terminalInput: string;
+  readonly terminalLines: readonly string[];
+  readonly onViewModeChange: (mode: "city" | "truth" | "dual") => void;
+  readonly onTerminalInputChange: (value: string) => void;
+  readonly onTerminalSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  readonly onToggleTerminal: () => void;
+  readonly onPlayPause: () => void;
+  readonly onPrevious: () => void;
+  readonly onNext: () => void;
+  readonly onReset: () => void;
+}
+
+const viewModes = ["city", "truth", "dual"] as const;
+
 export function LearningShell({
+  scene,
   replay,
-  onLoadReplay,
-  onMoveReplay,
+  infoCard,
+  selectedEntity,
+  viewMode,
+  telemetry,
+  terminalOpen,
+  terminalInput,
+  terminalLines,
+  onViewModeChange,
+  onTerminalInputChange,
+  onTerminalSubmit,
+  onToggleTerminal,
+  onPlayPause,
+  onPrevious,
+  onNext,
+  onReset,
 }: LearningShellProps) {
+  const atStart = replay.frameIndex === 0;
+  const atEnd = replay.frameCount > 0 && replay.frameIndex + 1 >= replay.frameCount;
+  const progress = replay.frameCount > 1
+    ? (replay.frameIndex / (replay.frameCount - 1)) * 100
+    : 0;
+
   return (
-    <main className="observatory-shell">
-      <header className="masthead">
-        <div>
-          <p className="eyebrow">LINUX OBSERVATORY / P0</p>
-          <h1>Truth before spectacle.</h1>
-        </div>
-        <span className="status-chip">ARCHITECTURE ONLINE</span>
-      </header>
+    <main className="visual-app">
+      <section className="scene-viewport" aria-label="Interactive Linux industrial megacity">
+        {scene}
+      </section>
 
-      <section className="hero-grid" aria-labelledby="mission-title">
-        <div className="mission-panel">
-          <p className="panel-index">00 / MISSION</p>
-          <h2 id="mission-title">
-            Runtime-grounded visualization for operating-system education.
-          </h2>
-          <p>
-            This shell proves the composition boundary only. No live Linux
-            execution and no 3D semantic claim are active in P0.
-          </p>
+      <header className="top-hud">
+        <div className="brand-block">
+          <span className="brand-mark" aria-hidden="true">L/</span>
+          <div>
+            <p>LINUX OBSERVATORY</p>
+            <small>SEMANTIC RUNTIME VISUALIZER / P2</small>
+          </div>
         </div>
-
-        <div className="truth-panel" aria-label="Required truth pipeline">
-          {modules.map(([title, description], index) => (
-            <article key={title}>
-              <span>{String(index + 1).padStart(2, "0")}</span>
-              <div>
-                <h3>{title}</h3>
-                <p>{description}</p>
-              </div>
-            </article>
+        <div className="evidence-state">
+          <span className="pulse-dot" aria-hidden="true" />
+          SYNTHETIC REPLAY — NOT LIVE LINUX
+        </div>
+        <div className="view-switcher" aria-label="Projection view">
+          {viewModes.map((mode) => (
+            <button
+              type="button"
+              key={mode}
+              className={viewMode === mode ? "active" : ""}
+              onClick={() => onViewModeChange(mode)}
+            >
+              {mode.toUpperCase()}
+            </button>
           ))}
         </div>
-      </section>
+      </header>
 
-      <section className="contract-card">
-        <div>
-          <p className="panel-index">FIRST FIDELITY CONTRACT</p>
-          <h2>Anonymous pipe</h2>
+      <aside className="event-hud" aria-live="polite">
+        <p className="hud-label">VALIDATED EVENT STREAM</p>
+        <div className="frame-sequence">
+          <strong>{String(replay.current?.sequence ?? 0).padStart(2, "0")}</strong>
+          <span>/ {String(replay.frameCount).padStart(2, "0")}</span>
         </div>
+        <p className="event-stage">
+          {(replay.current?.stage ?? "replay ready").replaceAll("_", " ")}
+        </p>
+        <h1>{replay.current?.summary ?? replay.title}</h1>
+        {replay.current && (
+          <dl className="event-metrics">
+            <div><dt>EVENT</dt><dd>{replay.current.eventKind}</dd></div>
+            <div>
+              <dt>GRAPH</dt>
+              <dd>
+                {replay.current.nodeCount === 0 && replay.current.edgeCount === 0
+                  ? "NATIVE COUNTS"
+                  : `${replay.current.nodeCount}N / ${replay.current.edgeCount}E`}
+              </dd>
+            </div>
+          </dl>
+        )}
+        {replay.status === "loading" && <p className="loading-copy">Validating frames…</p>}
+        {replay.error && <p className="error-copy" role="alert">{replay.error}</p>}
+      </aside>
+
+      <aside className="info-card" aria-label={`Information for ${selectedEntity}`}>
+        <div className="info-heading">
+          <span>ENTITY / {selectedEntity.toUpperCase()}</span>
+          <small>{infoCard.type}</small>
+        </div>
+        <h2>{infoCard.name}</h2>
         <dl>
-          <div>
-            <dt>VISUAL METAPHOR</dt>
-            <dd>Directional industrial conduit</dd>
-          </div>
-          <div>
-            <dt>TECHNICAL REALITY</dt>
-            <dd>Kernel byte stream referenced through file descriptors</dd>
-          </div>
-          <div>
-            <dt>LIMITATION</dt>
-            <dd>Not a file, not process-owned, not a message boundary</dd>
-          </div>
+          <div><dt>VISUAL METAPHOR</dt><dd>{infoCard.visualMetaphor}</dd></div>
+          <div><dt>TECHNICAL REALITY</dt><dd>{infoCard.technicalReality}</dd></div>
+          <div><dt>LIMITATIONS</dt><dd>{infoCard.limitations}</dd></div>
         </dl>
+        <p className="selection-hint">CLICK A MODULE TO INSPECT</p>
+      </aside>
+
+      <section className="playback-hud" aria-label="Replay controls">
+        <button type="button" onClick={onReset}>RESET</button>
+        <button type="button" disabled={atStart} onClick={onPrevious}>PREVIOUS</button>
+        <button type="button" className="primary-control" onClick={onPlayPause}>
+          <span aria-hidden="true">{replay.playing ? "Ⅱ" : "▶"}</span>
+          {replay.playing ? "PAUSE" : atEnd ? "REPLAY" : "PLAY"}
+        </button>
+        <button type="button" disabled={atEnd} onClick={onNext}>NEXT</button>
+        <div className="timeline" aria-label={`Frame ${replay.frameIndex + 1} of ${replay.frameCount}`}>
+          <span style={{ width: `${progress}%` }} />
+        </div>
+        <span className="timeline-label">
+          {String(Math.min(replay.frameIndex + 1, replay.frameCount)).padStart(2, "0")} / {String(replay.frameCount).padStart(2, "0")}
+        </span>
       </section>
 
-      <section className="replay-console" aria-labelledby="replay-title">
-        <div className="replay-heading">
-          <div>
-            <p className="panel-index">P1 / VERIFIED MOCK REPLAY</p>
-            <h2 id="replay-title">cat file.txt | grep linux</h2>
-          </div>
-          <span className="evidence-badge">SYNTHETIC — NOT LIVE EVIDENCE</span>
-        </div>
+      <button type="button" className="terminal-toggle" onClick={onToggleTerminal}>
+        <span>&gt;_</span> TERMINAL <kbd>CTRL</kbd><kbd>~</kbd>
+      </button>
 
-        <div className="replay-body">
-          <div className="replay-controls">
-            {replay.status === "idle" && (
-              <button
-                type="button"
-                disabled={!replay.available}
-                onClick={onLoadReplay}
-              >
-                {replay.available ? "LOAD VERIFIED REPLAY" : "OPEN IN DESKTOP APP"}
-              </button>
-            )}
-            {replay.status === "loading" && <p>Validating semantic frames…</p>}
-            {replay.status === "error" && (
-              <p role="alert">Replay rejected: {replay.error}</p>
-            )}
-            {replay.status === "ready" && replay.current && (
-              <>
-                <p className="frame-counter">
-                  FRAME {replay.frameIndex + 1} / {replay.frameCount}
-                </p>
-                <div className="button-row">
-                  <button
-                    type="button"
-                    disabled={replay.frameIndex === 0}
-                    onClick={() => onMoveReplay(-1)}
-                  >
-                    PREVIOUS
-                  </button>
-                  <button
-                    type="button"
-                    disabled={replay.frameIndex + 1 === replay.frameCount}
-                    onClick={() => onMoveReplay(1)}
-                  >
-                    NEXT EVENT
-                  </button>
-                </div>
-              </>
-            )}
+      {terminalOpen && (
+        <section className="terminal-overlay" aria-label="Synthetic replay terminal">
+          <div className="terminal-titlebar">
+            <span>REPLAY TERMINAL</span>
+            <strong>SYNTHETIC REPLAY — NOT LIVE LINUX</strong>
+            <button type="button" aria-label="Close terminal" onClick={onToggleTerminal}>×</button>
           </div>
-
-          <div className="frame-readout" aria-live="polite">
-            {replay.current ? (
-              <>
-                <p>{replay.current.stage.replaceAll("_", " ")}</p>
-                <h3>{replay.current.summary}</h3>
-                <dl>
-                  <div>
-                    <dt>EVENT</dt>
-                    <dd>{replay.current.eventKind}</dd>
-                  </div>
-                  <div>
-                    <dt>GRAPH</dt>
-                    <dd>
-                      {replay.current.nodeCount} nodes / {replay.current.edgeCount}{" "}
-                      edges
-                    </dd>
-                  </div>
-                </dl>
-                <small>{replay.caveat}</small>
-              </>
-            ) : (
-              <p>
-                The Rust reducer validates ordering, descriptor ownership, pipe
-                direction, evidence references, and graph invariants before a
-                frame reaches this UI.
-              </p>
-            )}
+          <div className="terminal-output" aria-live="polite">
+            {terminalLines.map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}
           </div>
-        </div>
-      </section>
+          <form onSubmit={onTerminalSubmit}>
+            <label htmlFor="replay-command">observer@synthetic:~$</label>
+            <input
+              id="replay-command"
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              value={terminalInput}
+              onChange={(event) => onTerminalInputChange(event.target.value)}
+            />
+            <button type="submit">RUN</button>
+          </form>
+        </section>
+      )}
 
-      <footer>
-        <span>SEMANTIC SCHEMA 1.0.0</span>
-        <span>EVIDENCE MODE: NONE / P0</span>
-        <span>RENDER BACKEND: DEFERRED</span>
+      <footer className="telemetry-strip">
+        <span>BACKEND <strong>{telemetry.backend.toUpperCase()}</strong></span>
+        <span>FPS <strong>{telemetry.fps?.toFixed(0) ?? "—"}</strong></span>
+        <span>FRAME <strong>{telemetry.frameTimeMs?.toFixed(1) ?? "—"} MS</strong></span>
+        <span>DRAW CALLS <strong>{telemetry.drawCalls ?? "—"}</strong></span>
+        <span>VISIBLE <strong>{telemetry.visibleObjects ?? "—"}</strong></span>
+        <span className="orbit-help">DRAG TO ORBIT · SCROLL TO ZOOM</span>
       </footer>
     </main>
   );

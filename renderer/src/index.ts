@@ -31,3 +31,13 @@ export class NullProjection implements SemanticProjection {
 
   dispose(): void {}
 }
+
+export {
+  IndustrialMegacity,
+  type IndustrialMegacityProps,
+  type RenderBackend,
+  type SceneTelemetry,
+  type VisualReplayFrame,
+  type VisualViewMode,
+} from "./IndustrialMegacity";
+export type { VisualEntityId } from "@linux-observatory/camera-director";

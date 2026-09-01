@@ -3,6 +3,7 @@
 use semantic_core::{ReplayEngine, ReplayScenario, ReplayStage};
 use serde::Serialize;
 
+#[cfg(not(test))]
 #[derive(Serialize)]
 struct ArchitectureStatus {
     phase: &'static str,
@@ -11,13 +12,14 @@ struct ArchitectureStatus {
     render_backend: &'static str,
 }
 
+#[cfg(not(test))]
 #[tauri::command]
 fn architecture_status() -> ArchitectureStatus {
     ArchitectureStatus {
-        phase: "P0",
+        phase: "P2",
         semantic_schema_version: semantic_core::SEMANTIC_SCHEMA_VERSION,
         live_evidence: false,
-        render_backend: "deferred",
+        render_backend: "webgpu_with_webgl2_fallback",
     }
 }
 
@@ -36,11 +38,12 @@ struct ReplayFramePresentation {
     stage: ReplayStage,
     event_kind: &'static str,
     summary: String,
+    focus_node_ids: Vec<String>,
     node_count: usize,
     edge_count: usize,
 }
 
-#[tauri::command]
+#[cfg_attr(not(test), tauri::command)]
 fn mock_pipe_replay() -> Result<ReplayPresentation, String> {
     let scenario = ReplayScenario::embedded_cat_grep()
         .map_err(|error| format!("invalid embedded replay fixture: {error}"))?;
@@ -52,6 +55,13 @@ fn mock_pipe_replay() -> Result<ReplayPresentation, String> {
             stage: frame.envelope.stage,
             event_kind: frame.envelope.event.kind(),
             summary: frame.envelope.event.summary(),
+            focus_node_ids: frame
+                .envelope
+                .event
+                .referenced_node_ids()
+                .into_iter()
+                .map(|id| id.as_str().to_owned())
+                .collect(),
             node_count: frame.graph.nodes.len(),
             edge_count: frame.graph.edges.len(),
         })
@@ -67,6 +77,7 @@ fn mock_pipe_replay() -> Result<ReplayPresentation, String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[cfg(not(test))]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -88,5 +99,13 @@ mod tests {
         assert_eq!(presentation.evidence_mode, "synthetic_replay");
         assert_eq!(presentation.frames.len(), 22);
         assert_eq!(presentation.frames.last().unwrap().sequence, 22);
+        assert!(presentation
+            .frames
+            .iter()
+            .all(|frame| !frame.focus_node_ids.is_empty()));
+        assert!(presentation.frames[1]
+            .focus_node_ids
+            .iter()
+            .any(|id| id == "pipe:1"));
     }
 }

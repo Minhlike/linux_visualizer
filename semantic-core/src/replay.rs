@@ -193,6 +193,61 @@ impl SemanticEvent {
             ),
         }
     }
+
+    pub fn referenced_node_ids(&self) -> Vec<NodeId> {
+        match self {
+            Self::ShellStarted { shell } => vec![shell.id.clone()],
+            Self::PipeCreated {
+                creator,
+                pipe,
+                read_endpoint,
+                write_endpoint,
+                ..
+            } => vec![
+                creator.clone(),
+                pipe.id.clone(),
+                read_endpoint.id.clone(),
+                write_endpoint.id.clone(),
+            ],
+            Self::ProcessForked { parent, child, .. } => {
+                vec![parent.clone(), child.id.clone()]
+            }
+            Self::FileDescriptorDuplicated {
+                process,
+                from_descriptor,
+                to_descriptor,
+            } => vec![
+                process.clone(),
+                from_descriptor.clone(),
+                to_descriptor.id.clone(),
+            ],
+            Self::FileDescriptorClosed {
+                process,
+                descriptor,
+            } => vec![process.clone(), descriptor.clone()],
+            Self::ProcessExecuted { process, .. }
+            | Self::ProcessExited { process, .. } => vec![process.clone()],
+            Self::FileOpened {
+                process,
+                file,
+                descriptor,
+                ..
+            } => vec![process.clone(), file.id.clone(), descriptor.id.clone()],
+            Self::BytesRead {
+                process,
+                descriptor,
+                ..
+            }
+            | Self::BytesWritten {
+                process,
+                descriptor,
+                ..
+            } => vec![process.clone(), descriptor.clone()],
+            Self::ProcessWaited { waiter, waited_for } => {
+                vec![waiter.clone(), waited_for.clone()]
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
