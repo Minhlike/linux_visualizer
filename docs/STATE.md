@@ -41,10 +41,18 @@ Updated: 2026-09-01
   - Truth on Demand & Progressive Disclosure: dynamic info inspector rendering PID, active FD tables, semantic relations, evidence provenance (syscall tracepoint), and confidence without screen clutter.
   - Canonical exact command resolver replacing substring dispatch hacks (`includes("grep")`, etc.) and providing clear unsupported command messaging without silent fallback.
   - Narrative relationship camera choreography: wide multi-entity framing (`pipelineFlow`, `shellSpawn`, `fileAccess`, `terminalIo`) preventing single-object zoom tunnel vision with 2.4s smooth damping.
+- P3.2: Interactive Event Board & Semantic Web Audio Engine:
+  - Interactive Event Board displaying the full chronological timeline of scenario events grouped into 4 execution phases (Khởi tạo, Điều phối, I/O Dòng dữ liệu, Kết thúc).
+  - Interactive jump-to-step on clicking any event in the board, with automatic active-item highlighting and smooth auto-scrolling.
+  - Real 3D visual data flow packet streams along precomputed physical conduits for File->CAT, Anonymous Pipe, GREP->Terminal, ECHO->File, LS->Terminal, and Shell->Children spawn energy pulses.
+  - Process internal motion linked to lifecycle (rapid rotation + harmonic piston oscillation while active; smooth spindown deceleration and settled piston upon exit).
+  - Lightweight procedural Semantic Audio Engine via Web Audio API generating distinct scientific acoustic cues for all key UNIX events (relay clicks, latching, transformation sweeps, pipe coupling, connector snap, intake/transfer pulses, spindown, and resolution chords).
+  - Spatial stereo panning based on module X-coordinates, event rate-limiting, polyphony protection, user mute toggle, and master volume slider with localStorage persistence.
+  - Zero-allocation render loop optimization eliminating per-frame BufferGeometry and Line object creation.
 
 ## Current
 
-- P3.1 complete and verified. Full verification suite passes: architecture boundary check, cargo check, cargo test (workspace), node tool tests, TypeScript build, and Vite production bundle. Single unified visual mode is live.
+- P3.2 complete and verified. Full verification suite passes: architecture boundary check, cargo check, cargo test (workspace), node tool tests, TypeScript build, and Vite production bundle. Single unified visual + audio mode is live.
 
 ## Next
 
@@ -67,5 +75,6 @@ Updated: 2026-09-01
 - P2 frontend bundle: 1,691.50 kB JavaScript / 466.71 kB gzip; 8.59 kB CSS / 2.65 kB gzip.
 - P3 frontend bundle: 1,715.32 kB JavaScript / 472.05 kB gzip; 10.98 kB CSS / 2.58 kB gzip.
 - P3.1 unified bundle: 1,722.42 kB JavaScript / 473.29 kB gzip; 10.96 kB CSS / 2.61 kB gzip.
-- Unified scene performance: ~60 FPS WebGPU/WebGL2, ~16.6ms frame time, ~45-52 draw calls, 1 single render loop.
+- P3.2 visual + audio bundle: 1,736.18 kB JavaScript / 476.69 kB gzip; 12.48 kB CSS / 2.90 kB gzip.
+- Unified scene performance: ~60 FPS WebGPU/WebGL2, ~16.6ms frame time, ~45-52 draw calls, 1 single render loop with zero per-frame allocations.
 - All 17 automated workspace tests pass (15 Rust unit/invariant tests + 2 Node architectural boundary/context pack tests).

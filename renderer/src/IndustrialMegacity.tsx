@@ -64,12 +64,87 @@ const allModules: readonly ModuleDefinition[] = [
   { id: "kernel", label: "KERNEL [nhân]", position: [0.5, 0, -3.4], color: "#6366f1", height: 4.2, body: "core" },
 ] as const;
 
+// ─── Real Inter-Process Data Curves ──────────────────────────────
 const pipeCurve = new THREE.CatmullRomCurve3([
   new THREE.Vector3(-0.65, 1.65, 1.2),
   new THREE.Vector3(0.2, 2.7, 2.2),
   new THREE.Vector3(1.45, 2.65, 2.1),
   new THREE.Vector3(2.25, 1.7, 1.2),
 ]);
+
+const fileToCatCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(-3.6, 1.2, -5),
+  new THREE.Vector3(-3.3, 2.1, -2.0),
+  new THREE.Vector3(-2.2, 1.6, 1.2),
+]);
+
+const grepToTerminalCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(3.2, 1.6, 1.2),
+  new THREE.Vector3(3.5, 2.1, -2.0),
+  new THREE.Vector3(3.6, 1.4, -5),
+]);
+
+const echoToFileCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(-2.2, 1.6, 1.2),
+  new THREE.Vector3(-2.9, 2.1, -2.0),
+  new THREE.Vector3(-3.6, 1.2, -5),
+]);
+
+const lsToTerminalCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(-2.2, 1.6, 1.2),
+  new THREE.Vector3(0.6, 2.5, -2.0),
+  new THREE.Vector3(3.6, 1.4, -5),
+]);
+
+// ─── Precomputed Static Geometries & Materials (Zero runtime allocation) ──
+const pipeTubeGeom = new THREE.TubeGeometry(pipeCurve, 48, 0.15, 10, false);
+const fileToCatTubeGeom = new THREE.TubeGeometry(fileToCatCurve, 32, 0.08, 8, false);
+const grepToTermTubeGeom = new THREE.TubeGeometry(grepToTerminalCurve, 32, 0.08, 8, false);
+const echoToFileTubeGeom = new THREE.TubeGeometry(echoToFileCurve, 32, 0.08, 8, false);
+const lsToTermTubeGeom = new THREE.TubeGeometry(lsToTerminalCurve, 32, 0.08, 8, false);
+
+const conduitGlassMaterial = new THREE.MeshStandardMaterial({
+  color: "#94a3b8",
+  metalness: 0.3,
+  roughness: 0.2,
+  transparent: true,
+  opacity: 0.28,
+  depthWrite: false,
+});
+
+const parentOfLineMaterial = new THREE.LineBasicMaterial({
+  color: "#94a3b8",
+  transparent: true,
+  opacity: 0.45,
+});
+
+const parentOfGeometries: Readonly<Record<string, THREE.BufferGeometry>> = {
+  cat: new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-6.5, 0.34, -1),
+    new THREE.Vector3(-4.35, 0.16, 0.1),
+    new THREE.Vector3(-2.2, 0.34, 1.2),
+  ]),
+  grep: new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-6.5, 0.34, -1),
+    new THREE.Vector3(-1.65, 0.16, 0.1),
+    new THREE.Vector3(3.2, 0.34, 1.2),
+  ]),
+  echo: new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-6.5, 0.34, -1),
+    new THREE.Vector3(-4.35, 0.16, 0.1),
+    new THREE.Vector3(-2.2, 0.34, 1.2),
+  ]),
+  ls: new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-6.5, 0.34, -1),
+    new THREE.Vector3(-4.35, 0.16, 0.1),
+    new THREE.Vector3(-2.2, 0.34, 1.2),
+  ]),
+  ps: new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-6.5, 0.34, -1),
+    new THREE.Vector3(-4.35, 0.16, 0.1),
+    new THREE.Vector3(-2.2, 0.34, 1.2),
+  ]),
+};
 
 function eventHasEntity(
   history: readonly VisualReplayFrame[],
@@ -175,7 +250,88 @@ function LabelSprite({
   );
 }
 
-// ─── Entity Module (distinct silhouettes per Linux role) ──────────
+// ─── Reusable Packet Stream (Zero allocation per frame) ───────────
+function PacketStream({
+  curve,
+  active,
+  color = "#2563eb",
+  count = 10,
+  speed = 0.65,
+}: {
+  readonly curve: THREE.Curve<THREE.Vector3>;
+  readonly active: boolean;
+  readonly color?: string;
+  readonly count?: number;
+  readonly speed?: number;
+}) {
+  const mesh = useRef<THREE.InstancedMesh>(null);
+  const m = useMemo(() => new THREE.Matrix4(), []);
+  const p = useMemo(() => new THREE.Vector3(), []);
+  const s = useMemo(() => new THREE.Vector3(), []);
+
+  useFrame((state) => {
+    if (!mesh.current) return;
+    for (let i = 0; i < count; i += 1) {
+      const progress = (state.clock.elapsedTime * speed + i / count) % 1;
+      curve.getPoint(progress, p);
+      s.setScalar(active ? 0.16 + (i % 3) * 0.02 : 0);
+      m.compose(p, new THREE.Quaternion(), s);
+      mesh.current.setMatrixAt(i, m);
+    }
+    mesh.current.instanceMatrix.needsUpdate = true;
+  });
+
+  return (
+    <instancedMesh ref={mesh} args={[undefined, undefined, count]} frustumCulled={false}>
+      <sphereGeometry args={[1, 8, 8]} />
+      <meshStandardMaterial
+        color={color}
+        emissive={color}
+        emissiveIntensity={2.5}
+        roughness={0.1}
+      />
+    </instancedMesh>
+  );
+}
+
+// ─── Energy Pulse for Process Spawn on ParentOf Rail ──────────────
+function SpawnPulse({
+  active,
+  childPosition,
+}: {
+  readonly active: boolean;
+  readonly childPosition: readonly [number, number, number];
+}) {
+  const mesh = useRef<THREE.Mesh>(null);
+  const pStart = useMemo(() => new THREE.Vector3(-6.5, 0.34, -1), []);
+  const pMid = useMemo(() => new THREE.Vector3((-6.5 + childPosition[0]) / 2, 0.16, (-1 + childPosition[2]) / 2), [childPosition]);
+  const pEnd = useMemo(() => new THREE.Vector3(childPosition[0], 0.34, childPosition[2]), [childPosition]);
+
+  useFrame((state) => {
+    if (!mesh.current) return;
+    if (!active) {
+      mesh.current.visible = false;
+      return;
+    }
+    mesh.current.visible = true;
+    const t = (state.clock.elapsedTime * 2.4) % 1;
+    if (t < 0.5) {
+      mesh.current.position.lerpVectors(pStart, pMid, t * 2);
+    } else {
+      mesh.current.position.lerpVectors(pMid, pEnd, (t - 0.5) * 2);
+    }
+    mesh.current.scale.setScalar(0.24 * (1 - Math.abs(t - 0.5)));
+  });
+
+  return (
+    <mesh ref={mesh} visible={active}>
+      <sphereGeometry args={[1, 8, 8]} />
+      <meshBasicMaterial color="#38bdf8" />
+    </mesh>
+  );
+}
+
+// ─── Entity Module (with internal lifecycle motion & spindown) ────
 function EntityModule({
   definition: d,
   active,
@@ -201,20 +357,29 @@ function EntityModule({
   const isStatic = d.body === "vault";
 
   useFrame((state, delta) => {
-    if (spindle.current && !isStatic && !exited) {
-      spindle.current.rotation.y += delta * (active ? 2.8 : 0.4);
+    // Process internal motion: spins smoothly when active, spins down when exited
+    if (spindle.current && !isStatic) {
+      if (exited) {
+        // Spindown deceleration settles to halt
+        spindle.current.rotation.y += delta * 0.04;
+      } else {
+        spindle.current.rotation.y += delta * (active ? 2.8 : 0.4);
+      }
     }
-    if (moving.current && active && !exited) {
-      moving.current.position.y = h / 2 + 0.3 + Math.sin(state.clock.elapsedTime * 4.5) * 0.25;
+    // Harmonic piston vertical oscillation
+    if (moving.current) {
+      if (active && !exited) {
+        moving.current.position.y = h / 2 + 0.3 + Math.sin(state.clock.elapsedTime * 4.5) * 0.25;
+      } else {
+        moving.current.position.y = h / 2 + 0.3;
+      }
     }
   });
 
   const emissiveI = exited ? 0.02 : highlighted ? 0.9 : active ? 0.45 : 0.05;
 
-  // Body geometry varies by entity type
   function body() {
     switch (d.body) {
-      // SHELL — wide command console with routing rails
       case "console":
         return (
           <>
@@ -239,7 +404,6 @@ function EntityModule({
           </>
         );
 
-      // CAT — tapered intake with rotating drum
       case "intake":
         return (
           <>
@@ -258,7 +422,6 @@ function EntityModule({
           </>
         );
 
-      // GREP — rectangular filter with vertical bars
       case "filter":
         return (
           <>
@@ -279,7 +442,6 @@ function EntityModule({
           </>
         );
 
-      // ECHO — horn/bell emitter
       case "emitter":
         return (
           <>
@@ -294,7 +456,6 @@ function EntityModule({
           </>
         );
 
-      // LS — scanner turret with rotating dish
       case "scanner":
         return (
           <>
@@ -313,7 +474,6 @@ function EntityModule({
           </>
         );
 
-      // PS — diagnostic probe with sensor rings
       case "probe":
         return (
           <>
@@ -330,7 +490,6 @@ function EntityModule({
           </>
         );
 
-      // FILE — static hexagonal archive vault
       case "vault":
         return (
           <>
@@ -349,7 +508,6 @@ function EntityModule({
           </>
         );
 
-      // TERMINAL — screen + keyboard gateway
       case "gateway":
         return (
           <>
@@ -372,7 +530,6 @@ function EntityModule({
           </>
         );
 
-      // KERNEL — large octagonal backbone with rings
       case "core":
         return (
           <>
@@ -409,7 +566,7 @@ function EntityModule({
         document.body.style.cursor = "auto";
       }}
     >
-      {/* Shared pedestal */}
+      {/* Shared precision machine pedestal */}
       <mesh position={[0, 0.16, 0]}>
         <cylinderGeometry args={[1.5, 1.7, 0.32, 16]} />
         <meshStandardMaterial color="#94a3b8" metalness={0.65} roughness={0.25} />
@@ -422,7 +579,7 @@ function EntityModule({
       {/* Entity-specific body */}
       {body()}
 
-      {/* FD Sockets (Process local file descriptors: FD 0, FD 1, FD 2) */}
+      {/* FD Sockets (Process-local file descriptors: FD 0, FD 1, FD 2) */}
       {["console", "intake", "filter", "emitter", "scanner", "probe"].includes(d.body) && (
         <group>
           {/* FD 0 (stdin) */}
@@ -518,12 +675,9 @@ function PipeConduit({
   readonly grepStdinBound: boolean;
   readonly onSelect: () => void;
 }) {
-  const geometry = useMemo(() => new THREE.TubeGeometry(pipeCurve, 48, 0.15, 10, false), []);
-  useEffect(() => () => geometry.dispose(), [geometry]);
-
   return (
     <group visible={created} onClick={(e) => { e.stopPropagation(); onSelect(); }}>
-      <mesh geometry={geometry}>
+      <mesh geometry={pipeTubeGeom}>
         <meshStandardMaterial
           color="#0d9488"
           emissive="#14b8a6"
@@ -562,35 +716,7 @@ function PipeConduit({
   );
 }
 
-// ─── Data Flow ────────────────────────────────────────────────────
-function DataFlow({ active }: { readonly active: boolean }) {
-  const mesh = useRef<THREE.InstancedMesh>(null);
-  const count = 12;
-  const m = useMemo(() => new THREE.Matrix4(), []);
-  const p = useMemo(() => new THREE.Vector3(), []);
-  const s = useMemo(() => new THREE.Vector3(), []);
-
-  useFrame((state) => {
-    if (!mesh.current) return;
-    for (let i = 0; i < count; i += 1) {
-      const progress = (state.clock.elapsedTime * 0.55 + i / count) % 1;
-      pipeCurve.getPoint(progress, p);
-      s.setScalar(active ? 0.18 + (i % 3) * 0.03 : 0);
-      m.compose(p, new THREE.Quaternion(), s);
-      mesh.current.setMatrixAt(i, m);
-    }
-    mesh.current.instanceMatrix.needsUpdate = true;
-  });
-
-  return (
-    <instancedMesh ref={mesh} args={[undefined, undefined, count]} frustumCulled={false}>
-      <sphereGeometry args={[1, 10, 10]} />
-      <meshStandardMaterial color="#0d9488" emissive="#2dd4bf" emissiveIntensity={2.5} roughness={0.1} />
-    </instancedMesh>
-  );
-}
-
-// ─── Completion Indicator ─────────────────────────────────────────
+// ─── Scenario Completion Indicator ────────────────────────────────
 function PipelineComplete({ visible }: { readonly visible: boolean }) {
   const group = useRef<THREE.Group>(null);
   useFrame((_, delta) => { if (group.current && visible) group.current.rotation.y += delta * 0.35; });
@@ -627,7 +753,7 @@ function CameraDirectorRig({
 
   useEffect(() => {
     controls.enableDamping = true;
-    controls.dampingFactor = 0.06;
+    controls.dampingFactor = 0.05;
     controls.minDistance = 4;
     controls.maxDistance = 42;
     controls.maxPolarAngle = Math.PI * 0.48;
@@ -667,7 +793,7 @@ function CameraDirectorRig({
   return null;
 }
 
-// ─── Telemetry ────────────────────────────────────────────────────
+// ─── Telemetry Probe ──────────────────────────────────────────────
 function TelemetryProbe({ onTelemetry }: { readonly onTelemetry: (v: SceneTelemetry) => void }) {
   const { gl, scene } = useThree();
   const elapsed = useRef(0);
@@ -694,7 +820,7 @@ function TelemetryProbe({ onTelemetry }: { readonly onTelemetry: (v: SceneTeleme
   return null;
 }
 
-// ─── Scene (single unified mode) ─────────────────────────────────
+// ─── Scene (Single Unified Mechanical Observatory) ─────────────────
 function Scene({
   frame,
   frameHistory,
@@ -722,7 +848,15 @@ function Scene({
   const pipeCreated = frameHistory.some((e) => e.eventKind === "pipe_created");
   const catStdoutBound = eventHasEntity(frameHistory, "file_descriptor_duplicated", "process:cat");
   const grepStdinBound = eventHasEntity(frameHistory, "file_descriptor_duplicated", "process:grep");
+
+  // Real Flow Activity Detectors
   const pipeFlow = frame?.stage === "pipe_io" && ["bytes_read", "bytes_written"].includes(frame?.eventKind ?? "");
+  const fileToCatFlow = hasCat && (frame?.stage === "file_io" || frame?.eventKind === "file_opened" || (frame?.eventKind === "bytes_read" && !frame?.focusNodeIds.some((id) => id.startsWith("pipe:"))));
+  const grepToTermFlow = hasGrep && (frame?.stage === "terminal_io" || (frame?.eventKind === "bytes_written" && frame?.focusNodeIds.some((id) => id.includes("grep") || id.includes("tty") || id.includes("terminal"))));
+  const echoToFileFlow = hasEcho && (frame?.eventKind === "bytes_written" || frame?.stage === "file_io");
+  const lsToTermFlow = hasLs && (frame?.eventKind === "bytes_written" || frame?.stage === "terminal_io");
+  const isForkingOrExec = frame?.eventKind === "process_forked" || frame?.eventKind === "process_executed";
+
   const pipelineComplete = totalFrames > 0 && (frame?.sequence ?? 0) >= totalFrames && ["process_waited", "exit", "wait"].includes(frame?.eventKind ?? "");
 
   const activeModules = useMemo(() => {
@@ -760,6 +894,7 @@ function Scene({
 
       <BackgroundStructures visible />
 
+      {/* Process Modules */}
       {activeModules.map((def) => {
         const isProcess = ["cat", "grep", "echo", "ls", "ps"].includes(def.id);
         const isActive = def.id === "kernel" || (def.id === "shell" && hasShell) ||
@@ -781,22 +916,27 @@ function Scene({
         );
       })}
 
-      {/* ParentOf Orchestration Conduits: Shell -> Child Processes */}
+      {/* ParentOf Orchestration Conduits & Spawn Pulses (Precomputed, Zero Allocation) */}
       {hasShell && activeModules.filter((m) => ["cat", "grep", "echo", "ls", "ps"].includes(m.id)).map((child) => {
-        const points = [
-          new THREE.Vector3(-6.5, 0.34, -1),
-          new THREE.Vector3((-6.5 + child.position[0]) / 2, 0.16, (-1 + child.position[2]) / 2),
-          new THREE.Vector3(child.position[0], 0.34, child.position[2]),
-        ];
-        const geom = new THREE.BufferGeometry().setFromPoints(points);
+        const geom = parentOfGeometries[child.id];
+        if (!geom) return null;
         return (
-          <primitive
-            object={new THREE.Line(geom, new THREE.LineBasicMaterial({ color: "#94a3b8", transparent: true, opacity: 0.45 }))}
-            key={`parentof-${child.id}`}
-          />
+          <group key={`parentof-group-${child.id}`}>
+            <primitive object={new THREE.Line(geom, parentOfLineMaterial)} />
+            <SpawnPulse active={isForkingOrExec} childPosition={child.position} />
+          </group>
         );
       })}
 
+      {/* File -> CAT Conduit & Data Packet Stream */}
+      {hasCat && (
+        <group>
+          <mesh geometry={fileToCatTubeGeom} material={conduitGlassMaterial} />
+          <PacketStream curve={fileToCatCurve} active={fileToCatFlow} color="#d97706" count={8} speed={0.7} />
+        </group>
+      )}
+
+      {/* Anonymous Pipe Conduit & Data Packet Stream */}
       <PipeConduit
         created={pipeCreated}
         active={pipeFlow || (playing && highlightedEntity === "pipe")}
@@ -805,7 +945,32 @@ function Scene({
         grepStdinBound={grepStdinBound}
         onSelect={() => onSelectEntity("pipe")}
       />
-      <DataFlow active={pipeFlow} />
+      <PacketStream curve={pipeCurve} active={pipeFlow} color="#0d9488" count={12} speed={0.6} />
+
+      {/* GREP -> Terminal Conduit & Data Packet Stream */}
+      {hasGrep && (
+        <group>
+          <mesh geometry={grepToTermTubeGeom} material={conduitGlassMaterial} />
+          <PacketStream curve={grepToTerminalCurve} active={grepToTermFlow} color="#059669" count={8} speed={0.7} />
+        </group>
+      )}
+
+      {/* ECHO -> File Conduit & Data Packet Stream */}
+      {hasEcho && (
+        <group>
+          <mesh geometry={echoToFileTubeGeom} material={conduitGlassMaterial} />
+          <PacketStream curve={echoToFileCurve} active={echoToFileFlow} color="#db2777" count={8} speed={0.7} />
+        </group>
+      )}
+
+      {/* LS -> Terminal Conduit & Data Packet Stream */}
+      {hasLs && (
+        <group>
+          <mesh geometry={lsToTermTubeGeom} material={conduitGlassMaterial} />
+          <PacketStream curve={lsToTerminalCurve} active={lsToTermFlow} color="#7c3aed" count={8} speed={0.7} />
+        </group>
+      )}
+
       <PipelineComplete visible={pipelineComplete} />
 
       <CameraDirectorRig directive={directive} cameraMode={cameraMode} />

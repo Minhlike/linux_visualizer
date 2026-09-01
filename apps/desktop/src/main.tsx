@@ -2,6 +2,7 @@ import { StrictMode, useEffect, useMemo, useRef, useState, type FormEvent } from
 import { createRoot, type Root } from "react-dom/client";
 import {
   LearningShell,
+  type EventBoardItem,
   type InfoCardView,
   type ReplayFrameView,
   type ReplayViewModel,
@@ -22,6 +23,7 @@ import catFileSource from "../../../semantic-core/fixtures/cat-file.json";
 import lsSource from "../../../semantic-core/fixtures/ls.json";
 import psSource from "../../../semantic-core/fixtures/ps.json";
 
+import { audioEngine } from "./audio";
 import "./styles.css";
 
 const root = document.getElementById("root");
@@ -97,13 +99,25 @@ const scenarioOptions = [
   { id: "ps-inspection-v1", title: "ps", command: "ps" },
 ];
 
-// ─── Canonical command → scenario resolver (exact match, no substring hack) ───
 const commandToScenario: Readonly<Record<string, string>> = {
   "cat file.txt | grep linux": "cat-file-pipe-grep-v1",
   "echo linux > sample.txt": "echo-redirect-v1",
   "cat sample.txt": "cat-file-v1",
   "ls -l": "ls-listing-v1",
   "ps": "ps-inspection-v1",
+};
+
+const entityXPositions: Readonly<Record<string, number>> = {
+  shell: -6.5,
+  cat: -2.2,
+  echo: -2.2,
+  ls: -2.2,
+  ps: -2.2,
+  filesystem: -3.6,
+  kernel: 0.5,
+  pipe: 0.8,
+  grep: 3.2,
+  terminal: 3.6,
 };
 
 const eventSummaries: Readonly<Record<string, string>> = {
@@ -216,7 +230,6 @@ function collectSemanticIds(value: unknown, result = new Set<string>()): Set<str
 function browserPresentation(fixtureId: string): NativeReplayPresentation {
   const fixture = browserFixtures[fixtureId];
   if (!fixture) throw new Error(`Kịch bản "${fixtureId}" không tồn tại trong bộ fixture.`);
-  // Track lifecycle: once a process exits it stays exited
   const exitedProcesses = new Set<string>();
   return {
     scenario_id: fixture.id,
@@ -225,7 +238,6 @@ function browserPresentation(fixtureId: string): NativeReplayPresentation {
     evidence_mode: fixture.evidence_mode,
     caveat: fixture.caveat,
     frames: fixture.events.map((envelope) => {
-      // Track exits
       if (envelope.event.type === "process_exited") {
         const ids = collectSemanticIds(envelope.event);
         ids.forEach((id) => { if (id.startsWith("process:")) exitedProcesses.add(id); });
@@ -306,7 +318,24 @@ function DesktopApp() {
     "Linux Observatory — Bảng lệnh mô phỏng ngữ nghĩa sẵn sàng.",
     "Hỗ trợ các kịch bản: cat | grep, echo >, cat, ls -l, ps",
   ]);
+  const [audioMuted, setAudioMuted] = useState(() => audioEngine.isMuted());
+  const [audioVolume, setAudioVolume] = useState(() => audioEngine.getVolume());
   const loadedOnce = useRef(false);
+
+  // Unlock Web Audio Context upon first user interaction
+  useEffect(() => {
+    const unlock = () => {
+      audioEngine.ensureContext();
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+    window.addEventListener("pointerdown", unlock);
+    window.addEventListener("keydown", unlock);
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
 
   async function loadScenario(scenarioId: string, startPlaying = false) {
     setStatus("loading");
@@ -326,10 +355,12 @@ function DesktopApp() {
       setFrameIndex(0);
       setStatus("ready");
       setPlaying(startPlaying);
+      audioEngine.playEvent("shell_started", -6.5);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setStatus("error");
       setPlaying(false);
+      audioEngine.playEvent("error", 0);
     }
   }
 
@@ -368,10 +399,32 @@ function DesktopApp() {
   );
   const visualFrame = presentation?.frames[frameIndex] ? toVisualFrame(presentation.frames[frameIndex]) : undefined;
 
+  // Sync selectedEntity and trigger procedural semantic sound on frame change
   useEffect(() => {
     const current = presentation?.frames[frameIndex];
-    if (current) setSelectedEntity(focusedVisualEntity(current));
+    if (current) {
+      const ent = focusedVisualEntity(current);
+      setSelectedEntity(ent);
+      const x = entityXPositions[ent] ?? 0;
+      audioEngine.playEvent(current.event_kind, x);
+      if (frameIndex === (presentation?.frames.length ?? 0) - 1) {
+        audioEngine.playEvent("completion", 0);
+      }
+    }
   }, [frameIndex, presentation]);
+
+  // Compute Event Board Items for the entire scenario
+  const allEvents: readonly EventBoardItem[] = useMemo(() => {
+    if (!presentation) return [];
+    return presentation.frames.map((f, idx) => ({
+      index: idx,
+      sequence: f.sequence,
+      stage: f.stage,
+      eventKind: f.event_kind,
+      summary: f.summary,
+      status: idx < frameIndex ? "past" : idx === frameIndex ? "current" : "upcoming",
+    }));
+  }, [presentation, frameIndex]);
 
   const replay: ReplayViewModel = {
     status,
@@ -390,6 +443,7 @@ function DesktopApp() {
   }
 
   function playPause() {
+    audioEngine.ensureContext();
     if (!presentation) { void loadScenario(selectedScenarioId, true); return; }
     if (!playing && frameIndex >= presentation.frames.length - 1) setFrameIndex(0);
     setPlaying((c) => !c);
@@ -398,6 +452,24 @@ function DesktopApp() {
   function resetReplay() { setPlaying(false); setFrameIndex(0); }
 
   function handleSelectScenario(scenarioId: string) { void loadScenario(scenarioId, false); }
+
+  function handleJumpToFrame(idx: number) {
+    setPlaying(false);
+    setFrameIndex(idx);
+  }
+
+  function handleToggleMute() {
+    audioEngine.ensureContext();
+    const next = !audioMuted;
+    audioEngine.setMuted(next);
+    setAudioMuted(next);
+  }
+
+  function handleVolumeChange(vol: number) {
+    audioEngine.ensureContext();
+    audioEngine.setVolume(vol);
+    setAudioVolume(vol);
+  }
 
   function submitTerminal(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -423,6 +495,7 @@ function DesktopApp() {
       `observer@synthetic:~$ ${command}`,
       "Lệnh chưa được hỗ trợ trong bản mô phỏng hiện tại. Nhấp vào các chip kịch bản ở trên để chọn lệnh có sẵn.",
     ]);
+    audioEngine.playEvent("error", 0);
     setTerminalInput("");
   }
 
@@ -514,6 +587,12 @@ function DesktopApp() {
       terminalOpen={terminalOpen}
       terminalInput={terminalInput}
       terminalLines={terminalLines}
+      allEvents={allEvents}
+      onJumpToFrame={handleJumpToFrame}
+      audioMuted={audioMuted}
+      audioVolume={audioVolume}
+      onToggleMute={handleToggleMute}
+      onVolumeChange={handleVolumeChange}
       onCameraModeChange={setCameraMode}
       onPlaybackSpeedChange={setPlaybackSpeed}
       onSelectScenario={handleSelectScenario}

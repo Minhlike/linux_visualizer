@@ -1,4 +1,4 @@
-import { useState, useRef, type FormEvent, type ReactNode } from "react";
+import { useState, useRef, useEffect, useMemo, type FormEvent, type ReactNode } from "react";
 
 export interface ReplayFrameView {
   readonly sequence: number;
@@ -8,6 +8,15 @@ export interface ReplayFrameView {
   readonly nodeCount: number;
   readonly edgeCount: number;
   readonly focusNodeIds: readonly string[];
+}
+
+export interface EventBoardItem {
+  readonly index: number;
+  readonly sequence: number;
+  readonly stage: string;
+  readonly eventKind: string;
+  readonly summary: string;
+  readonly status: "past" | "current" | "upcoming";
 }
 
 export interface ReplayViewModel {
@@ -62,6 +71,12 @@ export interface LearningShellProps {
   readonly terminalOpen: boolean;
   readonly terminalInput: string;
   readonly terminalLines: readonly string[];
+  readonly allEvents?: readonly EventBoardItem[];
+  readonly onJumpToFrame?: (index: number) => void;
+  readonly audioMuted?: boolean;
+  readonly audioVolume?: number;
+  readonly onToggleMute?: () => void;
+  readonly onVolumeChange?: (volume: number) => void;
   readonly onCameraModeChange?: (mode: "gentle" | "auto" | "free") => void;
   readonly onPlaybackSpeedChange?: (speed: number) => void;
   readonly onSelectScenario?: (id: string) => void;
@@ -98,6 +113,29 @@ function translateStage(stage: string): string {
   }
 }
 
+function getPhaseTitle(stage: string): string {
+  switch (stage) {
+    case "shell":
+    case "standard_streams_initialized":
+      return "I. KHỞI TẠO & MÔI TRƯỜNG SHELL";
+    case "pipe_creation":
+    case "fork":
+    case "file_descriptor_redirection":
+    case "exec":
+      return "II. ĐIỀU PHỐI TIẾN TRÌNH & ĐƯỜNG ỐNG";
+    case "file_opened":
+    case "file_io":
+    case "pipe_io":
+    case "terminal_io":
+      return "III. I/O & DÒNG DỮ LIỆU THỰC THI";
+    case "exit":
+    case "wait":
+      return "IV. KẾT THÚC & THU HỒI TÀI NGUYÊN";
+    default:
+      return "TIẾN TRÌNH HỆ THỐNG";
+  }
+}
+
 export function LearningShell({
   scene,
   replay,
@@ -111,6 +149,12 @@ export function LearningShell({
   terminalOpen,
   terminalInput,
   terminalLines,
+  allEvents = [],
+  onJumpToFrame,
+  audioMuted = false,
+  audioVolume = 0.55,
+  onToggleMute,
+  onVolumeChange,
   onCameraModeChange,
   onPlaybackSpeedChange,
   onSelectScenario,
@@ -125,6 +169,44 @@ export function LearningShell({
   const atStart = replay.frameIndex === 0;
   const atEnd = replay.frameCount > 0 && replay.frameIndex + 1 >= replay.frameCount;
   const progress = replay.frameCount > 1 ? (replay.frameIndex / (replay.frameCount - 1)) * 100 : 0;
+
+  // Event Board collapsible state
+  const [eventBoardCollapsed, setEventBoardCollapsed] = useState(false);
+  const activeItemRef = useRef<HTMLDivElement>(null);
+  const listContainerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll the active event in the board
+  useEffect(() => {
+    if (activeItemRef.current && !eventBoardCollapsed) {
+      activeItemRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [replay.frameIndex, eventBoardCollapsed]);
+
+  // Group events by phase
+  const groupedEvents = useMemo(() => {
+    const groups: Array<{ phaseTitle: string; items: EventBoardItem[] }> = [];
+    let currentPhase = "";
+    let currentGroup: EventBoardItem[] = [];
+
+    allEvents.forEach((item) => {
+      const phase = getPhaseTitle(item.stage);
+      if (phase !== currentPhase) {
+        if (currentGroup.length > 0) {
+          groups.push({ phaseTitle: currentPhase, items: currentGroup });
+        }
+        currentPhase = phase;
+        currentGroup = [item];
+      } else {
+        currentGroup.push(item);
+      }
+    });
+
+    if (currentGroup.length > 0) {
+      groups.push({ phaseTitle: currentPhase, items: currentGroup });
+    }
+
+    return groups;
+  }, [allEvents]);
 
   // Draggable terminal state
   const [terminalPos, setTerminalPos] = useState<{ x: number; y: number }>(() => {
@@ -182,6 +264,32 @@ export function LearningShell({
         </div>
 
         <div className="top-controls">
+          {/* Audio Controls */}
+          {onToggleMute && (
+            <div className="audio-controls" aria-label="Điều khiển âm thanh ngữ nghĩa">
+              <button
+                type="button"
+                className={`audio-btn ${audioMuted ? "muted" : "active"}`}
+                onClick={onToggleMute}
+                title={audioMuted ? "Bật âm thanh (Unmute)" : "Tắt âm thanh (Mute)"}
+              >
+                {audioMuted ? "🔇 TẮT" : `🔊 ${Math.round(audioVolume * 100)}%`}
+              </button>
+              {onVolumeChange && !audioMuted && (
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={audioVolume}
+                  onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+                  className="volume-slider"
+                  title={`Âm lượng: ${Math.round(audioVolume * 100)}%`}
+                />
+              )}
+            </div>
+          )}
+
           {/* Scenario selector */}
           {availableScenarios.length > 0 && onSelectScenario && (
             <select
@@ -214,33 +322,74 @@ export function LearningShell({
         </div>
       </header>
 
-      {/* Event HUD */}
-      <aside className="event-hud" aria-live="polite">
-        <p className="hud-label">DÒNG SỰ KIỆN ĐÃ XÁC THỰC</p>
-
-        <div className="frame-sequence">
-          <strong>{String(replay.current?.sequence ?? 0).padStart(2, "0")}</strong>
-          <span>/ {String(replay.frameCount).padStart(2, "0")}</span>
+      {/* Full Event Board HUD */}
+      <aside className={`event-board ${eventBoardCollapsed ? "collapsed" : ""}`} aria-live="polite">
+        <div className="event-board-header">
+          <div className="event-board-title">
+            <p className="hud-label">CHUỖI TIẾN TRÌNH SỰ KIỆN</p>
+            <div className="frame-sequence">
+              <strong>{String(replay.current?.sequence ?? 0).padStart(2, "0")}</strong>
+              <span>/ {String(replay.frameCount).padStart(2, "0")}</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="collapse-btn"
+            onClick={() => setEventBoardCollapsed((c) => !c)}
+            title={eventBoardCollapsed ? "Mở rộng bảng sự kiện" : "Thu gọn bảng sự kiện"}
+          >
+            {eventBoardCollapsed ? "＋ MỞ RỘNG" : "− THU GỌN"}
+          </button>
         </div>
 
-        <p className="event-stage">{translateStage(replay.current?.stage ?? "replay ready")}</p>
-        <h1>{replay.current?.summary ?? replay.title}</h1>
-
+        {/* Current Active Event Highlight Card */}
         {replay.current && (
-          <dl className="event-metrics">
-            <div>
-              <dt>SỰ KIỆN</dt>
-              <dd>{replay.current.eventKind}</dd>
+          <div className="active-event-card">
+            <span className="active-stage-tag">{translateStage(replay.current.stage)}</span>
+            <h2>{replay.current.summary}</h2>
+            <div className="active-event-metrics">
+              <span>SỰ KIỆN: <code>{replay.current.eventKind}</code></span>
+              <span>ĐỒ THỊ: <strong>{replay.current.nodeCount} nút / {replay.current.edgeCount} cạnh</strong></span>
             </div>
-            <div>
-              <dt>ĐỒ THỊ</dt>
-              <dd>
-                {replay.current.nodeCount === 0 && replay.current.edgeCount === 0
-                  ? "ĐÃ KIỂM CHỨNG"
-                  : `${replay.current.nodeCount} nút / ${replay.current.edgeCount} cạnh`}
-              </dd>
-            </div>
-          </dl>
+          </div>
+        )}
+
+        {/* Full Event Timeline / Board */}
+        {!eventBoardCollapsed && allEvents.length > 0 && (
+          <div className="timeline-event-list" ref={listContainerRef}>
+            {groupedEvents.map((group) => (
+              <div key={group.phaseTitle} className="timeline-phase-group">
+                <div className="phase-header">{group.phaseTitle}</div>
+                <div className="phase-events">
+                  {group.items.map((ev) => {
+                    const isCurrent = ev.status === "current";
+                    return (
+                      <div
+                        key={ev.index}
+                        ref={isCurrent ? activeItemRef : undefined}
+                        className={`timeline-event-item ${ev.status}`}
+                        onClick={() => onJumpToFrame?.(ev.index)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onJumpToFrame?.(ev.index); }}
+                      >
+                        <span className="event-step-badge">#{String(ev.sequence).padStart(2, "0")}</span>
+                        <div className="event-item-body">
+                          <div className="event-item-top">
+                            <span className="event-kind-pill">{ev.eventKind}</span>
+                            <span className="event-status-pill">
+                              {ev.status === "past" ? "✓ ĐÃ XONG" : ev.status === "current" ? "● HIỆN TẠI" : "○ CHỜ"}
+                            </span>
+                          </div>
+                          <p className="event-summary-text">{ev.summary}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {replay.status === "loading" && <p className="loading-copy">Đang kiểm chứng các khung hình…</p>}
