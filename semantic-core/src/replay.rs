@@ -1,0 +1,734 @@
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    ClaimConfidence, EvidenceRef, GraphError, NodeId, NodeKind, RelationKind,
+    SEMANTIC_SCHEMA_VERSION, SemanticEdge, SemanticGraph, SemanticNode,
+};
+
+pub const CAT_GREP_SCENARIO_JSON: &str = include_str!("../fixtures/cat-grep.json");
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceMode {
+    SyntheticReplay,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReplayScenario {
+    pub id: String,
+    pub title: String,
+    pub evidence_mode: EvidenceMode,
+    pub caveat: String,
+    pub events: Vec<SemanticEventEnvelope>,
+}
+
+impl ReplayScenario {
+    pub fn embedded_cat_grep() -> Result<Self, serde_json::Error> {
+        serde_json::from_str(CAT_GREP_SCENARIO_JSON)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SemanticEventEnvelope {
+    pub schema_version: String,
+    pub sequence: u64,
+    pub monotonic_time_ns: u64,
+    pub stage: ReplayStage,
+    pub evidence: Vec<EvidenceRef>,
+    pub event: SemanticEvent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayStage {
+    Shell,
+    PipeCreation,
+    Fork,
+    FileDescriptorRedirection,
+    Exec,
+    FileIo,
+    PipeIo,
+    Exit,
+    Wait,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InheritedDescriptor {
+    pub from_parent: NodeId,
+    pub child_descriptor: SemanticNode,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileAccess {
+    ReadOnly,
+    WriteOnly,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SemanticEvent {
+    ShellStarted {
+        shell: SemanticNode,
+    },
+    PipeCreated {
+        creator: NodeId,
+        pipe: SemanticNode,
+        read_endpoint: SemanticNode,
+        write_endpoint: SemanticNode,
+        read_descriptor: SemanticNode,
+        write_descriptor: SemanticNode,
+    },
+    ProcessForked {
+        parent: NodeId,
+        child: SemanticNode,
+        inherited_descriptors: Vec<InheritedDescriptor>,
+    },
+    FileDescriptorDuplicated {
+        process: NodeId,
+        from_descriptor: NodeId,
+        to_descriptor: SemanticNode,
+    },
+    FileDescriptorClosed {
+        process: NodeId,
+        descriptor: NodeId,
+    },
+    ProcessExecuted {
+        process: NodeId,
+        executable: String,
+        argv: Vec<String>,
+    },
+    FileOpened {
+        process: NodeId,
+        file: SemanticNode,
+        descriptor: SemanticNode,
+        access: FileAccess,
+    },
+    BytesRead {
+        process: NodeId,
+        descriptor: NodeId,
+        byte_count: u64,
+    },
+    BytesWritten {
+        process: NodeId,
+        descriptor: NodeId,
+        byte_count: u64,
+    },
+    ProcessExited {
+        process: NodeId,
+        status: i32,
+    },
+    ProcessWaited {
+        waiter: NodeId,
+        waited_for: NodeId,
+    },
+}
+
+impl SemanticEvent {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::ShellStarted { .. } => "shell_started",
+            Self::PipeCreated { .. } => "pipe_created",
+            Self::ProcessForked { .. } => "process_forked",
+            Self::FileDescriptorDuplicated { .. } => "file_descriptor_duplicated",
+            Self::FileDescriptorClosed { .. } => "file_descriptor_closed",
+            Self::ProcessExecuted { .. } => "process_executed",
+            Self::FileOpened { .. } => "file_opened",
+            Self::BytesRead { .. } => "bytes_read",
+            Self::BytesWritten { .. } => "bytes_written",
+            Self::ProcessExited { .. } => "process_exited",
+            Self::ProcessWaited { .. } => "process_waited",
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        match self {
+            Self::ShellStarted { shell } => format!("shell {} starts", shell.label),
+            Self::PipeCreated { creator, .. } => {
+                format!("{} creates an anonymous pipe and two FDs", creator.as_str())
+            }
+            Self::ProcessForked { parent, child, .. } => {
+                format!("{} forks {}", parent.as_str(), child.label)
+            }
+            Self::FileDescriptorDuplicated {
+                process,
+                from_descriptor,
+                to_descriptor,
+            } => format!(
+                "{} duplicates {} onto {}",
+                process.as_str(),
+                from_descriptor.as_str(),
+                to_descriptor.label
+            ),
+            Self::FileDescriptorClosed {
+                process,
+                descriptor,
+            } => format!("{} closes {}", process.as_str(), descriptor.as_str()),
+            Self::ProcessExecuted {
+                process,
+                executable,
+                ..
+            } => format!("{} execs {}", process.as_str(), executable),
+            Self::FileOpened { process, file, .. } => {
+                format!("{} opens {}", process.as_str(), file.label)
+            }
+            Self::BytesRead {
+                process,
+                byte_count,
+                ..
+            } => format!("{} reads {} bytes", process.as_str(), byte_count),
+            Self::BytesWritten {
+                process,
+                byte_count,
+                ..
+            } => format!("{} writes {} bytes", process.as_str(), byte_count),
+            Self::ProcessExited { process, status } => {
+                format!("{} exits with status {}", process.as_str(), status)
+            }
+            Self::ProcessWaited { waiter, waited_for } => format!(
+                "{} observes completion of {} via wait",
+                waiter.as_str(),
+                waited_for.as_str()
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReplayFrame {
+    pub envelope: SemanticEventEnvelope,
+    pub graph: SemanticGraph,
+}
+
+pub struct ReplayEngine {
+    graph: SemanticGraph,
+    last_time_ns: Option<u64>,
+}
+
+impl Default for ReplayEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ReplayEngine {
+    pub fn new() -> Self {
+        Self {
+            graph: SemanticGraph::empty(),
+            last_time_ns: None,
+        }
+    }
+
+    pub fn apply(&mut self, envelope: SemanticEventEnvelope) -> Result<ReplayFrame, ReplayError> {
+        let expected_sequence = self.graph.revision + 1;
+        if envelope.schema_version != SEMANTIC_SCHEMA_VERSION {
+            return Err(ReplayError::UnsupportedSchemaVersion(
+                envelope.schema_version,
+            ));
+        }
+        if envelope.sequence != expected_sequence {
+            return Err(ReplayError::OutOfOrder {
+                expected: expected_sequence,
+                actual: envelope.sequence,
+            });
+        }
+        if envelope.evidence.is_empty() {
+            return Err(ReplayError::MissingEvidence(envelope.sequence));
+        }
+        if self
+            .last_time_ns
+            .is_some_and(|previous| envelope.monotonic_time_ns < previous)
+        {
+            return Err(ReplayError::TimeWentBackward(envelope.sequence));
+        }
+
+        self.apply_event(&envelope)?;
+        self.graph.revision = envelope.sequence;
+        self.graph.validate().map_err(ReplayError::InvalidGraph)?;
+        self.last_time_ns = Some(envelope.monotonic_time_ns);
+
+        Ok(ReplayFrame {
+            envelope,
+            graph: self.graph.clone(),
+        })
+    }
+
+    pub fn replay(scenario: &ReplayScenario) -> Result<Vec<ReplayFrame>, ReplayError> {
+        let mut engine = Self::new();
+        scenario
+            .events
+            .iter()
+            .cloned()
+            .map(|event| engine.apply(event))
+            .collect()
+    }
+
+    fn apply_event(&mut self, envelope: &SemanticEventEnvelope) -> Result<(), ReplayError> {
+        let evidence = &envelope.evidence;
+        match &envelope.event {
+            SemanticEvent::ShellStarted { shell } => self.add_node(shell.clone()),
+            SemanticEvent::PipeCreated {
+                creator,
+                pipe,
+                read_endpoint,
+                write_endpoint,
+                read_descriptor,
+                write_descriptor,
+            } => {
+                self.require_node(creator)?;
+                require_kind(pipe, NodeKind::AnonymousPipe)?;
+                require_kind(read_endpoint, NodeKind::PipeEndpoint)?;
+                require_kind(write_endpoint, NodeKind::PipeEndpoint)?;
+                self.add_node(pipe.clone())?;
+                self.add_node(read_endpoint.clone())?;
+                self.add_node(write_endpoint.clone())?;
+                self.add_edge(
+                    read_endpoint.id.clone(),
+                    pipe.id.clone(),
+                    RelationKind::ReadEndOf,
+                    evidence,
+                )?;
+                self.add_edge(
+                    write_endpoint.id.clone(),
+                    pipe.id.clone(),
+                    RelationKind::WriteEndOf,
+                    evidence,
+                )?;
+                self.add_descriptor(
+                    creator,
+                    read_descriptor.clone(),
+                    &read_endpoint.id,
+                    evidence,
+                )?;
+                self.add_descriptor(
+                    creator,
+                    write_descriptor.clone(),
+                    &write_endpoint.id,
+                    evidence,
+                )
+            }
+            SemanticEvent::ProcessForked {
+                parent,
+                child,
+                inherited_descriptors,
+            } => {
+                self.require_node(parent)?;
+                require_kind(child, NodeKind::Process)?;
+                self.add_node(child.clone())?;
+                self.add_edge(
+                    parent.clone(),
+                    child.id.clone(),
+                    RelationKind::ParentOf,
+                    evidence,
+                )?;
+                for inherited in inherited_descriptors {
+                    let target = self.descriptor_target(parent, &inherited.from_parent)?;
+                    self.add_descriptor(
+                        &child.id,
+                        inherited.child_descriptor.clone(),
+                        &target,
+                        evidence,
+                    )?;
+                }
+                Ok(())
+            }
+            SemanticEvent::FileDescriptorDuplicated {
+                process,
+                from_descriptor,
+                to_descriptor,
+            } => {
+                let target = self.descriptor_target(process, from_descriptor)?;
+                self.add_descriptor(process, to_descriptor.clone(), &target, evidence)
+            }
+            SemanticEvent::FileDescriptorClosed {
+                process,
+                descriptor,
+            } => {
+                self.descriptor_target(process, descriptor)?;
+                self.remove_node(descriptor);
+                Ok(())
+            }
+            SemanticEvent::ProcessExecuted { process, argv, .. } => {
+                self.require_node(process)?;
+                if argv.is_empty() {
+                    return Err(ReplayError::EmptyArgv(process.clone()));
+                }
+                Ok(())
+            }
+            SemanticEvent::FileOpened {
+                process,
+                file,
+                descriptor,
+                access,
+            } => {
+                self.require_node(process)?;
+                require_kind(file, NodeKind::RegularFile)?;
+                self.add_node(file.clone())?;
+                self.add_descriptor(process, descriptor.clone(), &file.id, evidence)?;
+                let relation = match access {
+                    FileAccess::ReadOnly => RelationKind::ReadsFrom,
+                    FileAccess::WriteOnly => RelationKind::WritesTo,
+                };
+                self.add_edge(descriptor.id.clone(), file.id.clone(), relation, evidence)
+            }
+            SemanticEvent::BytesRead {
+                process,
+                descriptor,
+                byte_count,
+            } => {
+                require_positive_bytes(*byte_count)?;
+                let target = self.descriptor_target(process, descriptor)?;
+                let target_node = self.require_node(&target)?;
+                match target_node.kind {
+                    NodeKind::RegularFile
+                        if self.has_specific_relation(
+                            descriptor,
+                            &target,
+                            RelationKind::ReadsFrom,
+                        ) =>
+                    {
+                        Ok(())
+                    }
+                    NodeKind::PipeEndpoint
+                        if self.has_relation(&target, RelationKind::ReadEndOf) =>
+                    {
+                        Ok(())
+                    }
+                    _ => Err(ReplayError::InvalidReadTarget(target)),
+                }
+            }
+            SemanticEvent::BytesWritten {
+                process,
+                descriptor,
+                byte_count,
+            } => {
+                require_positive_bytes(*byte_count)?;
+                let target = self.descriptor_target(process, descriptor)?;
+                if self.has_relation(&target, RelationKind::WriteEndOf) {
+                    Ok(())
+                } else {
+                    Err(ReplayError::InvalidWriteTarget(target))
+                }
+            }
+            SemanticEvent::ProcessExited { process, .. } => {
+                self.require_node(process)?;
+                let descriptors: Vec<NodeId> = self
+                    .graph
+                    .edges
+                    .iter()
+                    .filter(|edge| {
+                        edge.from == *process && edge.relation == RelationKind::HasFileDescriptor
+                    })
+                    .map(|edge| edge.to.clone())
+                    .collect();
+                for descriptor in descriptors {
+                    self.remove_node(&descriptor);
+                }
+                Ok(())
+            }
+            SemanticEvent::ProcessWaited { waiter, waited_for } => {
+                self.require_node(waiter)?;
+                self.require_node(waited_for)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn add_node(&mut self, node: SemanticNode) -> Result<(), ReplayError> {
+        if self
+            .graph
+            .nodes
+            .iter()
+            .any(|existing| existing.id == node.id)
+        {
+            return Err(ReplayError::DuplicateNode(node.id));
+        }
+        self.graph.nodes.push(node);
+        Ok(())
+    }
+
+    fn remove_node(&mut self, id: &NodeId) {
+        self.graph.nodes.retain(|node| node.id != *id);
+        self.graph
+            .edges
+            .retain(|edge| edge.from != *id && edge.to != *id);
+        self.collect_unreferenced_pipe_objects();
+    }
+
+    fn require_node(&self, id: &NodeId) -> Result<&SemanticNode, ReplayError> {
+        self.graph
+            .nodes
+            .iter()
+            .find(|node| node.id == *id)
+            .ok_or_else(|| ReplayError::MissingNode(id.clone()))
+    }
+
+    fn add_descriptor(
+        &mut self,
+        process: &NodeId,
+        descriptor: SemanticNode,
+        target: &NodeId,
+        evidence: &[EvidenceRef],
+    ) -> Result<(), ReplayError> {
+        self.require_node(process)?;
+        self.require_node(target)?;
+        require_kind(&descriptor, NodeKind::FileDescriptorEntry)?;
+        self.add_node(descriptor.clone())?;
+        self.add_edge(
+            process.clone(),
+            descriptor.id.clone(),
+            RelationKind::HasFileDescriptor,
+            evidence,
+        )?;
+        self.add_edge(
+            descriptor.id,
+            target.clone(),
+            RelationKind::RefersTo,
+            evidence,
+        )
+    }
+
+    fn descriptor_target(
+        &self,
+        process: &NodeId,
+        descriptor: &NodeId,
+    ) -> Result<NodeId, ReplayError> {
+        self.require_node(process)?;
+        self.require_node(descriptor)?;
+        let owned = self.graph.edges.iter().any(|edge| {
+            edge.from == *process
+                && edge.to == *descriptor
+                && edge.relation == RelationKind::HasFileDescriptor
+        });
+        if !owned {
+            return Err(ReplayError::DescriptorNotOwned {
+                process: process.clone(),
+                descriptor: descriptor.clone(),
+            });
+        }
+        self.graph
+            .edges
+            .iter()
+            .find(|edge| edge.from == *descriptor && edge.relation == RelationKind::RefersTo)
+            .map(|edge| edge.to.clone())
+            .ok_or_else(|| ReplayError::DescriptorHasNoTarget(descriptor.clone()))
+    }
+
+    fn has_relation(&self, from: &NodeId, relation: RelationKind) -> bool {
+        self.graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == *from && edge.relation == relation)
+    }
+
+    fn has_specific_relation(&self, from: &NodeId, to: &NodeId, relation: RelationKind) -> bool {
+        self.graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == *from && edge.to == *to && edge.relation == relation)
+    }
+
+    fn collect_unreferenced_pipe_objects(&mut self) {
+        let orphaned_endpoints: Vec<NodeId> = self
+            .graph
+            .nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::PipeEndpoint)
+            .filter(|node| {
+                !self
+                    .graph
+                    .edges
+                    .iter()
+                    .any(|edge| edge.to == node.id && edge.relation == RelationKind::RefersTo)
+            })
+            .map(|node| node.id.clone())
+            .collect();
+
+        for endpoint in orphaned_endpoints {
+            self.graph.nodes.retain(|node| node.id != endpoint);
+            self.graph
+                .edges
+                .retain(|edge| edge.from != endpoint && edge.to != endpoint);
+        }
+
+        let orphaned_pipes: Vec<NodeId> = self
+            .graph
+            .nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::AnonymousPipe)
+            .filter(|node| {
+                !self.graph.edges.iter().any(|edge| {
+                    edge.to == node.id
+                        && matches!(
+                            edge.relation,
+                            RelationKind::ReadEndOf | RelationKind::WriteEndOf
+                        )
+                })
+            })
+            .map(|node| node.id.clone())
+            .collect();
+
+        for pipe in orphaned_pipes {
+            self.graph.nodes.retain(|node| node.id != pipe);
+            self.graph
+                .edges
+                .retain(|edge| edge.from != pipe && edge.to != pipe);
+        }
+    }
+
+    fn add_edge(
+        &mut self,
+        from: NodeId,
+        to: NodeId,
+        relation: RelationKind,
+        evidence: &[EvidenceRef],
+    ) -> Result<(), ReplayError> {
+        self.require_node(&from)?;
+        self.require_node(&to)?;
+        if self
+            .graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == from && edge.to == to && edge.relation == relation)
+        {
+            return Err(ReplayError::DuplicateRelation { from, to, relation });
+        }
+        self.graph.edges.push(SemanticEdge {
+            from,
+            to,
+            relation,
+            evidence: evidence.to_vec(),
+            confidence: ClaimConfidence::Inferred,
+        });
+        Ok(())
+    }
+}
+
+fn require_kind(node: &SemanticNode, expected: NodeKind) -> Result<(), ReplayError> {
+    if node.kind != expected {
+        return Err(ReplayError::WrongNodeKind {
+            node: node.id.clone(),
+            expected,
+            actual: node.kind.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn require_positive_bytes(byte_count: u64) -> Result<(), ReplayError> {
+    if byte_count == 0 {
+        return Err(ReplayError::ZeroByteActivity);
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReplayError {
+    DescriptorHasNoTarget(NodeId),
+    DescriptorNotOwned {
+        process: NodeId,
+        descriptor: NodeId,
+    },
+    DuplicateNode(NodeId),
+    DuplicateRelation {
+        from: NodeId,
+        to: NodeId,
+        relation: RelationKind,
+    },
+    EmptyArgv(NodeId),
+    InvalidGraph(GraphError),
+    InvalidReadTarget(NodeId),
+    InvalidWriteTarget(NodeId),
+    MissingEvidence(u64),
+    MissingNode(NodeId),
+    OutOfOrder {
+        expected: u64,
+        actual: u64,
+    },
+    TimeWentBackward(u64),
+    UnsupportedSchemaVersion(String),
+    WrongNodeKind {
+        node: NodeId,
+        expected: NodeKind,
+        actual: NodeKind,
+    },
+    ZeroByteActivity,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cat_grep_fixture_replays_deterministically() {
+        let scenario = ReplayScenario::embedded_cat_grep().expect("fixture must deserialize");
+        let first = ReplayEngine::replay(&scenario).expect("fixture must be semantically valid");
+        let second = ReplayEngine::replay(&scenario).expect("fixture must remain deterministic");
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 22);
+        assert_eq!(first.last().unwrap().graph.revision, 22);
+        assert!(
+            first
+                .last()
+                .unwrap()
+                .graph
+                .nodes
+                .iter()
+                .all(|node| node.kind != NodeKind::FileDescriptorEntry),
+            "process exit must close every remaining descriptor"
+        );
+        assert!(
+            first.last().unwrap().graph.nodes.iter().all(|node| {
+                !matches!(node.kind, NodeKind::AnonymousPipe | NodeKind::PipeEndpoint)
+            }),
+            "an anonymous pipe must disappear after its final descriptor closes"
+        );
+        assert!(
+            first
+                .last()
+                .unwrap()
+                .graph
+                .edges
+                .iter()
+                .all(|edge| edge.relation != RelationKind::WaitsFor),
+            "a completed wait must not remain as an active graph relationship"
+        );
+    }
+
+    #[test]
+    fn required_vertical_slice_stages_are_present() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let kinds: Vec<&str> = scenario
+            .events
+            .iter()
+            .map(|event| event.event.kind())
+            .collect();
+
+        for required in [
+            "shell_started",
+            "pipe_created",
+            "process_forked",
+            "file_descriptor_duplicated",
+            "process_executed",
+            "bytes_read",
+            "bytes_written",
+            "process_waited",
+        ] {
+            assert!(kinds.contains(&required), "missing event kind {required}");
+        }
+    }
+
+    #[test]
+    fn replay_rejects_unprovenanced_events() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let mut event = scenario.events[0].clone();
+        event.evidence.clear();
+
+        assert_eq!(
+            ReplayEngine::new().apply(event),
+            Err(ReplayError::MissingEvidence(1))
+        );
+    }
+}

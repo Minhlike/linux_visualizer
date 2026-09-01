@@ -6,6 +6,10 @@ use std::collections::HashSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod replay;
+
+pub use replay::*;
+
 pub const SEMANTIC_SCHEMA_VERSION: &str = "1.0.0";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -45,7 +49,7 @@ pub struct SemanticNode {
     pub label: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationKind {
     ParentOf,
@@ -118,6 +122,7 @@ impl SemanticGraph {
             }
         }
 
+        let mut edge_keys = HashSet::new();
         for edge in &self.edges {
             if edge.from == edge.to {
                 return Err(GraphError::SelfEdge(edge.from.clone()));
@@ -131,6 +136,14 @@ impl SemanticGraph {
             if edge.evidence.is_empty() && edge.confidence == ClaimConfidence::Observed {
                 return Err(GraphError::ObservedClaimWithoutEvidence);
             }
+            let key = (edge.from.clone(), edge.to.clone(), edge.relation.clone());
+            if !edge_keys.insert(key) {
+                return Err(GraphError::DuplicateEdge {
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
+                    relation: edge.relation.clone(),
+                });
+            }
         }
 
         Ok(())
@@ -141,6 +154,11 @@ impl SemanticGraph {
 pub enum GraphError {
     BlankNodeId,
     BlankNodeLabel(NodeId),
+    DuplicateEdge {
+        from: NodeId,
+        to: NodeId,
+        relation: RelationKind,
+    },
     DuplicateNode(NodeId),
     MissingEndpoint(NodeId),
     ObservedClaimWithoutEvidence,

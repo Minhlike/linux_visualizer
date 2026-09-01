@@ -6,7 +6,7 @@ It is not a 3D city generator. The semantic graph is the source of truth; city, 
 
 ## Current milestone
 
-P0 establishes the repository, architecture boundaries, machine-readable fidelity contracts, CI, and a minimal Tauri 2 + React shell. See [`docs/STATE.md`](docs/STATE.md).
+P0 established the repository, architecture boundaries, machine-readable fidelity contracts, CI, and a minimal Tauri 2 + React shell. P1 adds a deterministic, explicitly synthetic replay of `cat file.txt | grep linux` through a validated semantic graph. See [`docs/STATE.md`](docs/STATE.md).
 
 ## Architecture
 
@@ -27,6 +27,7 @@ Prerequisites: Node.js, npm, Rust, and the platform requirements from the Tauri 
 ```text
 npm install
 npm run verify
+npm run bench:replay
 npm run context-pack
 ```
 

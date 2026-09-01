@@ -21,6 +21,16 @@ Record hypotheses before interpreting results. Keep observations, inferences, an
 - Decision: treat trace data as evidence requiring normalization and provenance, never as the semantic graph itself.
 - Limitation: no runtime specimen or learner experiment exists in P0.
 
+## E-002: deterministic pipe replay
+
+- Type: software experiment; synthetic evidence only
+- Fixture: `semantic-core/fixtures/cat-grep.json`, 22 high-level semantic events.
+- Result: two independent replays produce identical frames; the final graph contains no live FD-entry nodes because process exit closes remaining descriptors.
+- Rejection checks: missing evidence, out-of-order sequence, reversed time, non-owned FD, zero-byte activity, invalid pipe direction, duplicate graph relations, and invalid graph endpoints.
+- Benchmark: 10,000 release-mode replays completed in 1,525 ms on the current machine (6,555.21 replay/s; 6,934.11 ns/event).
+- Interpretation: the reducer is fast enough for the tiny mock slice. This does not predict 3D FPS, large-graph performance, runtime-observer loss, or learner outcomes.
+- Limitation: the fixture presents one valid schedule. It is not a live trace and does not claim all shells or kernel executions interleave identically.
+
 ## Negative results
 
 - 2026-09-01: local QEMU executable not found.

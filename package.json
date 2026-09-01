@@ -18,7 +18,8 @@
     "context-pack": "node tools/context_pack/index.mjs",
     "tauri:check": "cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml",
     "tauri:dev": "npm run tauri --workspace @linux-observatory/desktop -- dev",
-    "test": "cargo test --workspace --exclude linux-observatory-desktop && node --test tools/*.test.mjs",
+    "test": "cargo test --workspace && node --test tools/*.test.mjs",
+    "bench:replay": "cargo run -p semantic-core --release --example replay_benchmark -- 10000",
     "verify": "npm run check && npm test && npm run build"
   }
 }
