@@ -41,10 +41,11 @@ export interface CameraDirective {
   readonly target: Vector3Tuple;
 }
 
-const cameraPoses: Readonly<
+/* Individual entity poses — used by auto mode */
+const entityPoses: Readonly<
   Record<VisualEntityId, { position: Vector3Tuple; target: Vector3Tuple }>
 > = {
-  overview: { position: [12, 10, 15], target: [0, 1.2, -1] },
+  overview: { position: [14, 11, 16], target: [0, 1.2, -1] },
   shell: { position: [-10, 7.5, 10], target: [-4.5, 1.6, -0.5] },
   cat: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
   echo: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
@@ -56,6 +57,14 @@ const cameraPoses: Readonly<
   kernel: { position: [6.5, 7.5, -9], target: [0.5, 1.5, -2] },
   pipe: { position: [5.2, 6.8, 11], target: [0.6, 1.8, 1] },
 };
+
+/* Relationship poses — camera sees 2–3 entities interacting (gentle mode) */
+const relationshipPoses = {
+  pipelineFlow: { position: [2, 10, 15], target: [0.5, 1.5, 0.8] },
+  shellSpawn: { position: [-1, 11, 14], target: [-1.5, 1.5, 0] },
+  fileAccess: { position: [-5, 9, 7], target: [-3, 1.2, -2] },
+  terminalIo: { position: [4, 9, 6], target: [1.5, 1.2, -2] },
+} as const;
 
 export function resolveNarrativeBeat(
   stage: string,
@@ -86,33 +95,36 @@ export function resolveCameraDirective(
   const beat = resolveNarrativeBeat(stage, sequence, totalFrames);
 
   let entityId: VisualEntityId = "overview";
+  let pose = entityPoses.overview;
 
   if (mode === "gentle") {
-    // In gentle mode, prioritize broad thematic framing
     switch (beat) {
       case "initial_overview":
       case "final_overview":
         entityId = "overview";
+        pose = entityPoses.overview;
         break;
       case "orchestration":
-        entityId = semanticNodeIds.some((id) => id.includes("shell")) ? "shell" : "kernel";
+        entityId = "shell";
+        pose = relationshipPoses.shellSpawn;
         break;
       case "io_pipeline":
         if (stage === "pipe_io" || semanticNodeIds.some((id) => id.startsWith("pipe:"))) {
           entityId = "pipe";
+          pose = relationshipPoses.pipelineFlow;
         } else if (semanticNodeIds.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc"))) {
           entityId = "filesystem";
+          pose = relationshipPoses.fileAccess;
         } else if (semanticNodeIds.some((id) => id.includes("tty") || id.includes("terminal"))) {
           entityId = "terminal";
-        } else if (semanticNodeIds.some((id) => id.includes("grep"))) {
-          entityId = "grep";
+          pose = relationshipPoses.terminalIo;
         } else {
-          entityId = "cat";
+          entityId = "kernel";
+          pose = relationshipPoses.pipelineFlow;
         }
         break;
     }
   } else {
-    // In auto mode, follow active focus node
     if (stage === "pipe_io" || semanticNodeIds.some((id) => id.startsWith("pipe:"))) {
       entityId = "pipe";
     } else if (semanticNodeIds.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc"))) {
@@ -134,8 +146,8 @@ export function resolveCameraDirective(
     } else {
       entityId = beat === "final_overview" || beat === "initial_overview" ? "overview" : "kernel";
     }
+    pose = entityPoses[entityId] ?? entityPoses.overview;
   }
 
-  const pose = cameraPoses[entityId] ?? cameraPoses.overview;
   return { entityId, sequence, beat, ...pose };
 }

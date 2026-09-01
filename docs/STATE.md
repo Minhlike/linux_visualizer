@@ -32,11 +32,19 @@ Updated: 2026-09-01
 - P3: Complete Vietnamese UI localization preserving standard technical identifiers (Linux Observatory, bash, cat, grep, PID, FD, syscall, sh, echo, ls, ps).
 - P3: Floating draggable terminal popup with session position memory, preset scenario launch chips, and Ctrl+~ shortcut.
 - P3: Narrative beat camera director with 3 operational modes (THEO DÕI NHẸ, TỰ ĐỘNG, TỰ DO), user orbit suspension, and 6 playback speed settings (0.25x, 0.5x, 0.75x, 1x, 1.5x, 2x).
-- P3: Dual/Truth performance optimization eliminating per-frame tube geometry allocations and introducing zero-draw-call 2D SVG graph overlay for DUAL mode.
+- P3.1: Unified single visual mode (Linux Observatory):
+  - Completely eliminated Truth/Dual mode fragmentation; unified mechanical metaphor, semantic truth, runtime state, and relationship graph into a single 3D world (1 Canvas, 1 camera, 1 render loop).
+  - Distinct entity silhouettes reflecting UNIX roles: Shell (console & routing rails), CAT (intake reader), GREP (filtering chamber with vertical bars), ECHO (horn emitter), LS (scanner turret with dish), PS (diagnostic probe with sensor rings), Filesystem (hexagonal archive vault), Terminal (screen + keyboard gateway), Kernel (octagonal backbone core).
+  - Physical socket ports for process-local file descriptors (FD 0 stdin, FD 1 stdout, FD 2 stderr) directly mounted on machine chassis with on-demand hover/selection labels.
+  - ParentOf orchestration linkages visually connecting parent orchestrator (Shell) to child process bays.
+  - Exited process state halting internal mechanical spindles and dimming status domes.
+  - Truth on Demand & Progressive Disclosure: dynamic info inspector rendering PID, active FD tables, semantic relations, evidence provenance (syscall tracepoint), and confidence without screen clutter.
+  - Canonical exact command resolver replacing substring dispatch hacks (`includes("grep")`, etc.) and providing clear unsupported command messaging without silent fallback.
+  - Narrative relationship camera choreography: wide multi-entity framing (`pipelineFlow`, `shellSpawn`, `fileAccess`, `terminalIo`) preventing single-object zoom tunnel vision with 2.4s smooth damping.
 
 ## Current
 
-- P3 complete and verified. Full verification suite passes: architecture boundary check, cargo check, cargo test (workspace), node tool tests, TypeScript build, and Vite production bundle.
+- P3.1 complete and verified. Full verification suite passes: architecture boundary check, cargo check, cargo test (workspace), node tool tests, TypeScript build, and Vite production bundle. Single unified visual mode is live.
 
 ## Next
 
@@ -58,4 +66,6 @@ Updated: 2026-09-01
 - P1 reducer: 10,000 validated 22-frame replays in 1,525 ms; 6,555.21 replays/s and 6,934.11 ns/event on the current machine in Rust release mode.
 - P2 frontend bundle: 1,691.50 kB JavaScript / 466.71 kB gzip; 8.59 kB CSS / 2.65 kB gzip.
 - P3 frontend bundle: 1,715.32 kB JavaScript / 472.05 kB gzip; 10.98 kB CSS / 2.58 kB gzip.
+- P3.1 unified bundle: 1,722.42 kB JavaScript / 473.29 kB gzip; 10.96 kB CSS / 2.61 kB gzip.
+- Unified scene performance: ~60 FPS WebGPU/WebGL2, ~16.6ms frame time, ~45-52 draw calls, 1 single render loop.
 - All 17 automated workspace tests pass (15 Rust unit/invariant tests + 2 Node architectural boundary/context pack tests).

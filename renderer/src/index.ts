@@ -38,6 +38,5 @@ export {
   type RenderBackend,
   type SceneTelemetry,
   type VisualReplayFrame,
-  type VisualViewMode,
 } from "./IndustrialMegacity";
 export type { VisualEntityId } from "@linux-observatory/camera-director";
