@@ -1236,4 +1236,59 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn entity_evidence_accumulates_and_unrelated_entities_do_not_receive_new_evidence() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let frames = ReplayEngine::replay(&scenario).unwrap();
+        let presentation = PresentationScenario::from_replay(&scenario, &frames);
+
+        // Frame 1: shell starts
+        let frame1_shell = presentation.frames[0]
+            .entities
+            .iter()
+            .find(|e| e.id == "process:shell")
+            .unwrap();
+        assert_eq!(frame1_shell.provenance.len(), 1);
+        assert_eq!(frame1_shell.provenance[0].sequence, 1);
+
+        // Frame 4: file_descriptor_duplicated on cat (shell is not in focus_candidates)
+        let frame4 = &presentation.frames[3];
+        assert_eq!(frame4.event_kind, "file_descriptor_duplicated");
+        assert!(!frame4.focus_candidates.contains(&"process:shell".to_string()));
+
+        let frame4_shell = frame4
+            .entities
+            .iter()
+            .find(|e| e.id == "process:shell")
+            .unwrap();
+        // Shell provenance must NOT have sequence 4 evidence!
+        assert!(
+            !frame4_shell.provenance.iter().any(|ev| ev.sequence == 4),
+            "unrelated entity process:shell must not receive evidence from sequence 4"
+        );
+    }
+
+    #[test]
+    fn fd_close_persists_removal_from_snapshot() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let frames = ReplayEngine::replay(&scenario).unwrap();
+        let presentation = PresentationScenario::from_replay(&scenario, &frames);
+
+        // In cat-grep scenario, cat closes fd:cat:10 at sequence 5
+        let close_idx = presentation
+            .frames
+            .iter()
+            .position(|f| f.event_kind == "file_descriptor_closed" && f.summary.contains("fd:cat:10"))
+            .expect("must have fd close frame");
+
+        // Verify in all subsequent frames that fd:cat:10 is NOT present in graph entities
+        for frame in &presentation.frames[close_idx..] {
+            assert!(
+                !frame.entities.iter().any(|e| e.id == "fd:cat:10"),
+                "closed descriptor fd:cat:10 must not be present in active entities at sequence {}",
+                frame.sequence
+            );
+        }
+    }
 }

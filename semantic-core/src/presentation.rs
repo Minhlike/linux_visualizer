@@ -133,14 +133,17 @@ impl PresentationScenario {
                 _ => {}
             }
 
-            // Record provenance for nodes referenced in this event
+            // Record and accumulate provenance for nodes referenced in this event
             for node_id in &focus_candidates {
-                entity_provenance
-                    .entry(node_id.clone())
-                    .or_insert_with(|| frame.envelope.evidence.clone());
+                let prov = entity_provenance.entry(node_id.clone()).or_default();
+                for ev in &frame.envelope.evidence {
+                    if !prov.contains(ev) {
+                        prov.push(ev.clone());
+                    }
+                }
             }
 
-            // Derive lifecycle for each node in current graph
+            // Derive lifecycle and provenance for each node in current graph
             let current_entities: Vec<SemanticEntityPresentation> = frame
                 .graph
                 .nodes
@@ -155,7 +158,7 @@ impl PresentationScenario {
                     let provenance = entity_provenance
                         .get(id_str)
                         .cloned()
-                        .unwrap_or_else(|| frame.envelope.evidence.clone());
+                        .unwrap_or_default();
 
                     let confidence = ClaimConfidence::Inferred;
 

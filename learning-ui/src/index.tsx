@@ -138,39 +138,63 @@ function getPhaseTitle(stage: string): string {
 }
 
 // ─── Causal Lane Helper ──────────────────────────────────────────
-type CausalLaneId = "SHELL" | "PROCESS_1" | "PIPE" | "PROCESS_2" | "FILESYSTEM" | "TERMINAL";
+export type SemanticLaneId = "shell" | "cat" | "grep" | "echo" | "ls" | "ps" | "pipe" | "filesystem" | "terminal";
 
 interface CausalLaneDef {
-  id: CausalLaneId;
+  id: SemanticLaneId;
   label: string;
   color: string;
 }
 
-function getEventLanes(event: EventBoardItem): CausalLaneId[] {
+const entityLaneConfigs: Readonly<Record<SemanticLaneId, { label: string; color: string }>> = {
+  shell: { label: "SHELL [sh]", color: "#2563eb" },
+  cat: { label: "CAT [cat]", color: "#d97706" },
+  grep: { label: "GREP [grep]", color: "#059669" },
+  echo: { label: "ECHO [echo]", color: "#db2777" },
+  ls: { label: "LS [ls]", color: "#7c3aed" },
+  ps: { label: "PS [ps]", color: "#0891b2" },
+  pipe: { label: "PIPE [ống]", color: "#0d9488" },
+  filesystem: { label: "TẬP TIN [vfs]", color: "#4f46e5" },
+  terminal: { label: "TERMINAL [tty]", color: "#0d9488" },
+};
+
+function getEventInvolvedLanes(event: EventBoardItem, scenarioId?: string): SemanticLaneId[] {
   const k = event.eventKind;
   const s = event.stage;
+  const summary = event.summary.toLowerCase();
 
-  if (k === "shell_started") return ["SHELL"];
-  if (k === "standard_streams_initialized") return ["SHELL", "TERMINAL"];
-  if (k === "pipe_created") return ["SHELL", "PIPE"];
-  if (k === "process_forked") return ["SHELL", "PROCESS_1"];
+  // Child process resolution
+  let child: SemanticLaneId = "cat";
+  if (summary.includes("grep") || scenarioId?.includes("grep")) child = "grep";
+  else if (summary.includes("echo") || scenarioId?.includes("echo")) child = "echo";
+  else if (summary.includes("ls") || scenarioId?.includes("ls")) child = "ls";
+  else if (summary.includes("ps") || scenarioId?.includes("ps")) child = "ps";
+  else if (summary.includes("cat") || scenarioId?.includes("cat")) child = "cat";
+
+  if (k === "shell_started") return ["shell"];
+  if (k === "standard_streams_initialized") return ["shell", "terminal"];
+  if (k === "pipe_created") return ["shell", "pipe"];
+  if (k === "process_forked") return ["shell", child];
   if (k === "file_descriptor_duplicated" || k === "file_descriptor_closed" || k === "process_executed") {
-    return ["PROCESS_1"];
+    return [child];
   }
-  if (k === "file_opened") return ["FILESYSTEM", "PROCESS_1"];
+  if (k === "file_opened") return ["filesystem", child];
   if (k === "bytes_read") {
-    if (s === "pipe_io") return ["PIPE", "PROCESS_2"];
-    return ["FILESYSTEM", "PROCESS_1"];
+    if (s === "pipe_io" || summary.includes("pipe")) return ["pipe", "grep"];
+    return ["filesystem", child];
   }
   if (k === "bytes_written") {
-    if (s === "pipe_io") return ["PROCESS_1", "PIPE"];
-    if (s === "terminal_io") return ["PROCESS_2", "TERMINAL"];
-    return ["PROCESS_1", "FILESYSTEM"];
+    if (s === "pipe_io" || summary.includes("pipe")) return ["cat", "pipe"];
+    if (s === "terminal_io" || summary.includes("terminal") || summary.includes("stdout")) {
+      return [child, "terminal"];
+    }
+    if (child === "echo") return ["echo", "filesystem"];
+    return [child, "terminal"];
   }
-  if (k === "process_exited") return ["PROCESS_1"];
-  if (k === "process_waited") return ["SHELL", "PROCESS_1"];
+  if (k === "process_exited") return [child];
+  if (k === "process_waited") return ["shell", child];
 
-  return ["SHELL"];
+  return ["shell"];
 }
 
 export function LearningShell({
@@ -247,28 +271,31 @@ export function LearningShell({
     return groups;
   }, [allEvents]);
 
-  // Determine dynamic label for process 1 & process 2
-  const process1Name = useMemo(() => {
-    if (currentScenarioId?.includes("grep")) return "CAT";
-    if (currentScenarioId?.includes("echo")) return "ECHO";
-    if (currentScenarioId?.includes("ls")) return "LS";
-    if (currentScenarioId?.includes("ps")) return "PS";
-    return "TIẾN TRÌNH 1";
-  }, [currentScenarioId]);
+  // Dynamically compute scenario-specific active lanes
+  const causalLanes: readonly CausalLaneDef[] = useMemo(() => {
+    const lanes: CausalLaneDef[] = [
+      { id: "shell", ...entityLaneConfigs.shell },
+    ];
 
-  const process2Name = useMemo(() => {
-    if (currentScenarioId?.includes("grep")) return "GREP";
-    return "TIẾN TRÌNH 2";
-  }, [currentScenarioId]);
+    if (currentScenarioId?.includes("grep")) {
+      lanes.push({ id: "cat", ...entityLaneConfigs.cat });
+      lanes.push({ id: "pipe", ...entityLaneConfigs.pipe });
+      lanes.push({ id: "grep", ...entityLaneConfigs.grep });
+    } else if (currentScenarioId?.includes("echo")) {
+      lanes.push({ id: "echo", ...entityLaneConfigs.echo });
+    } else if (currentScenarioId?.includes("ls")) {
+      lanes.push({ id: "ls", ...entityLaneConfigs.ls });
+    } else if (currentScenarioId?.includes("ps")) {
+      lanes.push({ id: "ps", ...entityLaneConfigs.ps });
+    } else {
+      lanes.push({ id: "cat", ...entityLaneConfigs.cat });
+    }
 
-  const causalLanes: readonly CausalLaneDef[] = useMemo(() => [
-    { id: "SHELL", label: "SHELL [sh]", color: "#2563eb" },
-    { id: "PROCESS_1", label: process1Name, color: "#d97706" },
-    { id: "PIPE", label: "PIPE [ống]", color: "#0d9488" },
-    { id: "PROCESS_2", label: process2Name, color: "#059669" },
-    { id: "FILESYSTEM", label: "TẬP TIN [vfs]", color: "#4f46e5" },
-    { id: "TERMINAL", label: "TERMINAL [tty]", color: "#0d9488" },
-  ], [process1Name, process2Name]);
+    lanes.push({ id: "filesystem", ...entityLaneConfigs.filesystem });
+    lanes.push({ id: "terminal", ...entityLaneConfigs.terminal });
+
+    return lanes;
+  }, [currentScenarioId]);
 
   // Draggable terminal state
   const [terminalPos, setTerminalPos] = useState<{ x: number; y: number }>(() => {
@@ -446,7 +473,7 @@ export function LearningShell({
                   <div className="lane-timeline-track">
                     <div className="lane-guide-line" />
                     {allEvents.map((ev) => {
-                      const involvedLanes = getEventLanes(ev);
+                      const involvedLanes = getEventInvolvedLanes(ev, currentScenarioId);
                       const isNodeInLane = involvedLanes.includes(lane.id);
                       const isCurrent = ev.status === "current";
 
@@ -459,7 +486,7 @@ export function LearningShell({
                           key={ev.index}
                           className={`lane-slot node ${ev.status} ${isCurrent ? "pulse" : ""}`}
                           onClick={() => onJumpToFrame?.(ev.index)}
-                          onMouseEnter={() => onHoverEntity?.(lane.id.toLowerCase())}
+                          onMouseEnter={() => onHoverEntity?.(lane.id)}
                           onMouseLeave={() => onHoverEntity?.(null)}
                           title={`#${ev.sequence}: ${ev.summary}`}
                           role="button"

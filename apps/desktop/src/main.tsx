@@ -14,7 +14,7 @@ import {
   type VisualEntityId,
   type VisualReplayFrame,
 } from "@linux-observatory/renderer";
-import type { CameraFollowMode } from "@linux-observatory/camera-director";
+import { resolveActionPlan, type CameraFollowMode } from "@linux-observatory/camera-director";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 import catGrepSource from "../../../semantic-core/fixtures/cat-grep.json";
@@ -467,17 +467,25 @@ function DesktopApp() {
   );
   const visualFrame = presentation?.frames[frameIndex] ? toVisualFrame(presentation.frames[frameIndex]) : undefined;
 
-  /* Sync selectedEntity and play audio only when frame actually changes */
+  /* Sync selectedEntity and play audio only when frame actually changes using canonical ActionPlan */
   useEffect(() => {
     const current = presentation?.frames[frameIndex];
     if (!current) return;
     if (frameIndex === prevFrameIndex.current) return; // Prevent duplicate audio
     prevFrameIndex.current = frameIndex;
 
-    const ent = focusedVisualEntity(current);
+    const plan = resolveActionPlan(
+      current.event_kind,
+      current.stage,
+      current.focus_candidates,
+      current.sequence,
+      presentation?.frames.length ?? 1,
+    );
+
+    const ent = plan.sourceEntity !== "overview" ? plan.sourceEntity : (focusedVisualEntity(current));
     setSelectedEntity(ent);
-    const x = entityXPositions[ent] ?? 0;
-    audioEngine.playEvent(current.event_kind, x);
+    const x = entityXPositions[plan.sourceEntity] ?? 0;
+    audioEngine.playEvent(plan.audioCue, x);
 
     /* Update audio ambience level based on how active the system is */
     const activeCount = frameHistory.filter((f) => !f.eventKind.includes("exit") && !f.eventKind.includes("wait")).length;
