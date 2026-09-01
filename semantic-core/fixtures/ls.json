@@ -1,0 +1,142 @@
+{
+  "id": "ls-listing-v1",
+  "title": "ls -l",
+  "command": "ls -l",
+  "evidence_mode": "synthetic_replay",
+  "caveat": "Synthetic replay representing directory listing, reading directory entries, and output formatting to terminal.",
+  "events": [
+    {
+      "schema_version": "1.0.0",
+      "sequence": 1,
+      "monotonic_time_ns": 1000,
+      "stage": "shell",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 1 }],
+      "event": {
+        "type": "shell_started",
+        "shell": { "id": "process:shell", "kind": "shell", "label": "sh" }
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 2,
+      "monotonic_time_ns": 2000,
+      "stage": "shell",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 2 }],
+      "event": {
+        "type": "standard_streams_initialized",
+        "process": "process:shell",
+        "terminal": { "id": "device:tty", "kind": "terminal", "label": "/dev/tty" },
+        "stdin_descriptor": { "id": "fd:shell:0", "kind": "file_descriptor_entry", "label": "shell stdin (fd 0)" },
+        "stdout_descriptor": { "id": "fd:shell:1", "kind": "file_descriptor_entry", "label": "shell stdout (fd 1)" },
+        "stderr_descriptor": { "id": "fd:shell:2", "kind": "file_descriptor_entry", "label": "shell stderr (fd 2)" }
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 3,
+      "monotonic_time_ns": 3000,
+      "stage": "fork",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 3 }],
+      "event": {
+        "type": "process_forked",
+        "parent": "process:shell",
+        "child": { "id": "process:ls", "kind": "process", "label": "ls child" },
+        "inherited_descriptors": [
+          {
+            "from_parent": "fd:shell:1",
+            "child_descriptor": { "id": "fd:ls:1", "kind": "file_descriptor_entry", "label": "ls stdout (fd 1)" }
+          }
+        ]
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 4,
+      "monotonic_time_ns": 4000,
+      "stage": "file_io",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 4 }],
+      "event": {
+        "type": "file_opened",
+        "process": "process:ls",
+        "file": { "id": "file:current_dir", "kind": "directory", "label": "." },
+        "descriptor": { "id": "fd:ls:3", "kind": "file_descriptor_entry", "label": "dir fd 3" },
+        "access": "read_only"
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 5,
+      "monotonic_time_ns": 5000,
+      "stage": "exec",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 5 }],
+      "event": {
+        "type": "process_executed",
+        "process": "process:ls",
+        "executable": "/bin/ls",
+        "argv": ["ls", "-l"]
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 6,
+      "monotonic_time_ns": 6000,
+      "stage": "file_io",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 6 }],
+      "event": {
+        "type": "bytes_read",
+        "process": "process:ls",
+        "descriptor": "fd:ls:3",
+        "byte_count": 128
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 7,
+      "monotonic_time_ns": 7000,
+      "stage": "file_io",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 7 }],
+      "event": {
+        "type": "file_descriptor_closed",
+        "process": "process:ls",
+        "descriptor": "fd:ls:3"
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 8,
+      "monotonic_time_ns": 8000,
+      "stage": "terminal_io",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 8 }],
+      "event": {
+        "type": "bytes_written",
+        "process": "process:ls",
+        "descriptor": "fd:ls:1",
+        "byte_count": 256
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 9,
+      "monotonic_time_ns": 9000,
+      "stage": "exit",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 9 }],
+      "event": {
+        "type": "process_exited",
+        "process": "process:ls",
+        "status": 0
+      }
+    },
+    {
+      "schema_version": "1.0.0",
+      "sequence": 10,
+      "monotonic_time_ns": 10000,
+      "stage": "wait",
+      "evidence": [{ "source_id": "synthetic:ls:v1", "sequence": 10 }],
+      "event": {
+        "type": "process_waited",
+        "waiter": "process:shell",
+        "waited_for": "process:ls"
+      }
+    }
+  ]
+}

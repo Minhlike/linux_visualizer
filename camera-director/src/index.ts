@@ -10,25 +10,33 @@ export interface SemanticFocusRequest {
   readonly requestedAtRevision: number;
 }
 
-export interface CameraDirector {
-  requestFocus(request: SemanticFocusRequest): void;
-  cancelPending(): void;
-}
+export type CameraFollowMode = "gentle" | "auto" | "free";
 
 export type VisualEntityId =
   | "overview"
   | "shell"
   | "cat"
   | "grep"
+  | "echo"
+  | "ls"
+  | "ps"
   | "filesystem"
+  | "terminal"
   | "kernel"
   | "pipe";
+
+export type NarrativeBeat =
+  | "initial_overview"
+  | "orchestration"
+  | "io_pipeline"
+  | "final_overview";
 
 export type Vector3Tuple = readonly [number, number, number];
 
 export interface CameraDirective {
   readonly entityId: VisualEntityId;
   readonly sequence: number;
+  readonly beat: NarrativeBeat;
   readonly position: Vector3Tuple;
   readonly target: Vector3Tuple;
 }
@@ -36,36 +44,98 @@ export interface CameraDirective {
 const cameraPoses: Readonly<
   Record<VisualEntityId, { position: Vector3Tuple; target: Vector3Tuple }>
 > = {
-  overview: { position: [13, 11, 16], target: [0, 1.4, -1] },
-  shell: { position: [-12, 8, 11], target: [-4.8, 1.7, -0.5] },
-  cat: { position: [-8, 6.5, 10], target: [-1.2, 1.7, 0.7] },
-  grep: { position: [9, 6.8, 10], target: [2.1, 1.7, 0.7] },
-  filesystem: { position: [-9, 7, -10], target: [-2, 1.5, -4] },
-  kernel: { position: [7, 8, -10], target: [0.5, 1.6, -2] },
-  pipe: { position: [5.8, 7.5, 12], target: [0.7, 2, 1] },
+  overview: { position: [12, 10, 15], target: [0, 1.2, -1] },
+  shell: { position: [-10, 7.5, 10], target: [-4.5, 1.6, -0.5] },
+  cat: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
+  echo: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
+  ls: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
+  ps: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
+  grep: { position: [8.5, 6.5, 9.5], target: [2.2, 1.6, 0.8] },
+  filesystem: { position: [-8.5, 6.8, -9], target: [-2.2, 1.4, -3.8] },
+  terminal: { position: [8, 7, -8.5], target: [2, 1.4, -3.5] },
+  kernel: { position: [6.5, 7.5, -9], target: [0.5, 1.5, -2] },
+  pipe: { position: [5.2, 6.8, 11], target: [0.6, 1.8, 1] },
 };
+
+export function resolveNarrativeBeat(
+  stage: string,
+  sequence: number,
+  totalFrames: number,
+): NarrativeBeat {
+  if (sequence <= 1) return "initial_overview";
+  if (totalFrames > 0 && sequence >= totalFrames) return "final_overview";
+  if (stage === "shell" || stage === "pipe_creation" || stage === "fork") {
+    return "orchestration";
+  }
+  if (stage === "pipe_io" || stage === "file_io" || stage === "terminal_io" || stage === "exec") {
+    return "io_pipeline";
+  }
+  if (stage === "exit" || stage === "wait") {
+    return "final_overview";
+  }
+  return "orchestration";
+}
 
 export function resolveCameraDirective(
   semanticNodeIds: readonly string[],
   stage: string,
   sequence: number,
+  totalFrames = 0,
+  mode: CameraFollowMode = "gentle",
 ): CameraDirective {
+  const beat = resolveNarrativeBeat(stage, sequence, totalFrames);
+
   let entityId: VisualEntityId = "overview";
 
-  if (sequence <= 1 || sequence >= 22) {
-    entityId = "overview";
-  } else if (stage === "pipe_io" || semanticNodeIds.some((id) => id.startsWith("pipe:"))) {
-    entityId = "pipe";
-  } else if (semanticNodeIds.some((id) => id === "file:file.txt")) {
-    entityId = "filesystem";
-  } else if (semanticNodeIds.some((id) => id === "process:grep")) {
-    entityId = "grep";
-  } else if (semanticNodeIds.some((id) => id === "process:cat")) {
-    entityId = "cat";
-  } else if (semanticNodeIds.some((id) => id === "process:shell")) {
-    entityId = "shell";
+  if (mode === "gentle") {
+    // In gentle mode, prioritize broad thematic framing
+    switch (beat) {
+      case "initial_overview":
+      case "final_overview":
+        entityId = "overview";
+        break;
+      case "orchestration":
+        entityId = semanticNodeIds.some((id) => id.includes("shell")) ? "shell" : "kernel";
+        break;
+      case "io_pipeline":
+        if (stage === "pipe_io" || semanticNodeIds.some((id) => id.startsWith("pipe:"))) {
+          entityId = "pipe";
+        } else if (semanticNodeIds.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc"))) {
+          entityId = "filesystem";
+        } else if (semanticNodeIds.some((id) => id.includes("tty") || id.includes("terminal"))) {
+          entityId = "terminal";
+        } else if (semanticNodeIds.some((id) => id.includes("grep"))) {
+          entityId = "grep";
+        } else {
+          entityId = "cat";
+        }
+        break;
+    }
+  } else {
+    // In auto mode, follow active focus node
+    if (stage === "pipe_io" || semanticNodeIds.some((id) => id.startsWith("pipe:"))) {
+      entityId = "pipe";
+    } else if (semanticNodeIds.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc"))) {
+      entityId = "filesystem";
+    } else if (semanticNodeIds.some((id) => id.includes("tty") || id.includes("terminal"))) {
+      entityId = "terminal";
+    } else if (semanticNodeIds.some((id) => id.includes("grep"))) {
+      entityId = "grep";
+    } else if (semanticNodeIds.some((id) => id.includes("echo"))) {
+      entityId = "echo";
+    } else if (semanticNodeIds.some((id) => id.includes("ls"))) {
+      entityId = "ls";
+    } else if (semanticNodeIds.some((id) => id.includes("ps"))) {
+      entityId = "ps";
+    } else if (semanticNodeIds.some((id) => id.includes("cat"))) {
+      entityId = "cat";
+    } else if (semanticNodeIds.some((id) => id.includes("shell"))) {
+      entityId = "shell";
+    } else {
+      entityId = beat === "final_overview" || beat === "initial_overview" ? "overview" : "kernel";
+    }
   }
 
-  const pose = cameraPoses[entityId];
-  return { entityId, sequence, ...pose };
+  const pose = cameraPoses[entityId] ?? cameraPoses.overview;
+  return { entityId, sequence, beat, ...pose };
 }

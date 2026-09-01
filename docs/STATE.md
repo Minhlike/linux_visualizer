@@ -15,28 +15,41 @@ Updated: 2026-09-01
 - P1 deterministic 22-frame mock replay implemented for `cat file.txt | grep linux`.
 - Replay reducer validates sequence/time, evidence presence, descriptor ownership, pipe direction, and graph invariants.
 - Native Tauri command exposes validated presentation frames; learning UI provides explicit synthetic-evidence labelling and step controls.
-- P2 first visual vertical slice implemented with React Three Fiber and a WebGPU renderer that falls back to WebGL2.
+- P2: first visual vertical slice implemented with React Three Fiber and a WebGPU renderer that falls back to WebGL2.
 - Procedural Industrial Megacity renders Shell, CAT, GREP, Filesystem, Kernel, anonymous-pipe conduit, directed connections, instanced background buildings, ground, fog, lighting, labels, and orbit controls.
 - All 22 validated frames drive entity lifecycle/highlights, pipe appearance, descriptor-era routing, pipe data flow, smooth camera focus, and the final pipeline-complete overview.
 - Entity selection updates the three-part fidelity Info Card; `Ctrl+~` opens a synthetic terminal that starts the same validated replay.
+- P3: Generalized semantic core and multi-scenario engine supporting 5 validated scenarios:
+  1. `cat file.txt | grep linux` (pipeline with anonymous pipe and dup2 redirection)
+  2. `echo linux > sample.txt` (file redirection write)
+  3. `cat sample.txt` (file reading to standard output)
+  4. `ls -l` (directory traversal and listing)
+  5. `ps` (system process table inspection via virtual /proc)
+- P3: Renderer-neutral presentation contract (`PresentationScenario`, `PresentationFrame`, `SemanticEntityPresentation`, `SemanticRelationPresentation`, `SemanticDelta`, `SemanticSnapshot`) strictly decoupling visual projections from core evidence.
+- P3: Invariant suite covering deterministic replay across all 5 scenarios, monotonic sequence/timestamp validation, provenance enforcement, cross-process FD ownership isolation, pipe directional read/write enforcement, and fork/exec lifecycle hierarchy.
+- P3: Elimination of all hardcoded sequence reasoning (`sequence == 22` / fixed frame numbers) across backend, camera director, and visual components.
+- P3: Mechanical visual redesign switching to an airy, high-depth light architectural aesthetic (`#eef2f6`) with observable internal assemblies: stepped pedestals, chrome guide columns, transparent acrylic casings, rotating spindles, animated harmonic pistons, and stator rings.
+- P3: Complete Vietnamese UI localization preserving standard technical identifiers (Linux Observatory, bash, cat, grep, PID, FD, syscall, sh, echo, ls, ps).
+- P3: Floating draggable terminal popup with session position memory, preset scenario launch chips, and Ctrl+~ shortcut.
+- P3: Narrative beat camera director with 3 operational modes (THEO DÕI NHẸ, TỰ ĐỘNG, TỰ DO), user orbit suspension, and 6 playback speed settings (0.25x, 0.5x, 0.75x, 1x, 1.5x, 2x).
+- P3: Dual/Truth performance optimization eliminating per-frame tube geometry allocations and introducing zero-draw-call 2D SVG graph overlay for DUAL mode.
 
 ## Current
 
-- P2 visual quality gate complete locally; the replay-driven 3D scene is now the primary desktop surface.
+- P3 complete and verified. Full verification suite passes: architecture boundary check, cargo check, cargo test (workspace), node tool tests, TypeScript build, and Vite production bundle.
 
 ## Next
 
-- Generate frontend DTOs from the authoritative schema instead of maintaining parallel semantic types.
-- Add property tests for graph invariants and replay determinism.
-- Split the Three/WebGPU production bundle before expanding scene scope.
+- Generate authoritative frontend DTOs automatically from Rust schemars schemas.
+- Add live runtime observer adapters (WSL2 strace/ebpf) when host capabilities permit.
+- Code split Three/WebGPU vendor chunks for faster initial paint.
 
 ## Blockers / constraints
 
 - QEMU is not installed on the current Windows machine; it is not required before P6.
 - The official Tauri Windows prerequisite recommends MSVC and Visual Studio C++ Build Tools. This machine lacks `link.exe`, but the installed GNU Rust toolchain completed a native release build. The MSVC workflow is preserved under `ci/` as an inactive template because the current GitHub token cannot publish active workflow files.
 - The project license is intentionally undecided; repository code is currently `UNLICENSED`.
-- P2 remains a synthetic replay and makes no live-Linux evidence claim.
-- Three.js 0.185 emits a development-only `THREE.Clock` deprecation warning through the current React Three Fiber render loop; fresh-page QA had no console errors.
+- Scenarios remain validated synthetic replays and make no live-Linux evidence claim.
 
 ## Measurements
 
@@ -44,4 +57,5 @@ Updated: 2026-09-01
 - First native optimized build: 4m 23s on the current Windows machine with a cold release cache.
 - P1 reducer: 10,000 validated 22-frame replays in 1,525 ms; 6,555.21 replays/s and 6,934.11 ns/event on the current machine in Rust release mode.
 - P2 frontend bundle: 1,691.50 kB JavaScript / 466.71 kB gzip; 8.59 kB CSS / 2.65 kB gzip.
-- Browser visual QA at 1280×720 used WebGPU and measured 98–102 FPS / 9.8–10.2 ms average frame time, 2 reported render calls, and 61–66 visible scene objects. These are local development measurements, not a cross-device benchmark.
+- P3 frontend bundle: 1,715.32 kB JavaScript / 472.05 kB gzip; 10.98 kB CSS / 2.58 kB gzip.
+- All 17 automated workspace tests pass (15 Rust unit/invariant tests + 2 Node architectural boundary/context pack tests).

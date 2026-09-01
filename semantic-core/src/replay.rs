@@ -7,6 +7,10 @@ use crate::{
 };
 
 pub const CAT_GREP_SCENARIO_JSON: &str = include_str!("../fixtures/cat-grep.json");
+pub const ECHO_REDIRECTION_SCENARIO_JSON: &str = include_str!("../fixtures/echo-redirection.json");
+pub const CAT_FILE_SCENARIO_JSON: &str = include_str!("../fixtures/cat-file.json");
+pub const LS_SCENARIO_JSON: &str = include_str!("../fixtures/ls.json");
+pub const PS_SCENARIO_JSON: &str = include_str!("../fixtures/ps.json");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +22,8 @@ pub enum EvidenceMode {
 pub struct ReplayScenario {
     pub id: String,
     pub title: String,
+    #[serde(default)]
+    pub command: String,
     pub evidence_mode: EvidenceMode,
     pub caveat: String,
     pub events: Vec<SemanticEventEnvelope>,
@@ -26,6 +32,43 @@ pub struct ReplayScenario {
 impl ReplayScenario {
     pub fn embedded_cat_grep() -> Result<Self, serde_json::Error> {
         serde_json::from_str(CAT_GREP_SCENARIO_JSON)
+    }
+
+    pub fn embedded_echo_redirection() -> Result<Self, serde_json::Error> {
+        serde_json::from_str(ECHO_REDIRECTION_SCENARIO_JSON)
+    }
+
+    pub fn embedded_cat_file() -> Result<Self, serde_json::Error> {
+        serde_json::from_str(CAT_FILE_SCENARIO_JSON)
+    }
+
+    pub fn embedded_ls() -> Result<Self, serde_json::Error> {
+        serde_json::from_str(LS_SCENARIO_JSON)
+    }
+
+    pub fn embedded_ps() -> Result<Self, serde_json::Error> {
+        serde_json::from_str(PS_SCENARIO_JSON)
+    }
+
+    pub fn all_scenarios() -> Result<Vec<Self>, serde_json::Error> {
+        Ok(vec![
+            Self::embedded_cat_grep()?,
+            Self::embedded_echo_redirection()?,
+            Self::embedded_cat_file()?,
+            Self::embedded_ls()?,
+            Self::embedded_ps()?,
+        ])
+    }
+
+    pub fn find_by_id(id: &str) -> Option<Self> {
+        Self::all_scenarios().ok()?.into_iter().find(|s| s.id == id)
+    }
+
+    pub fn find_by_command(command: &str) -> Option<Self> {
+        let normalized = command.trim();
+        Self::all_scenarios().ok()?.into_iter().find(|s| {
+            s.command == normalized || s.title == normalized
+        })
     }
 }
 
@@ -49,6 +92,7 @@ pub enum ReplayStage {
     Exec,
     FileIo,
     PipeIo,
+    TerminalIo,
     Exit,
     Wait,
 }
@@ -64,6 +108,7 @@ pub struct InheritedDescriptor {
 pub enum FileAccess {
     ReadOnly,
     WriteOnly,
+    ReadWrite,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -71,6 +116,16 @@ pub enum FileAccess {
 pub enum SemanticEvent {
     ShellStarted {
         shell: SemanticNode,
+    },
+    ProcessStarted {
+        process: SemanticNode,
+    },
+    StandardStreamsInitialized {
+        process: NodeId,
+        terminal: SemanticNode,
+        stdin_descriptor: SemanticNode,
+        stdout_descriptor: SemanticNode,
+        stderr_descriptor: SemanticNode,
     },
     PipeCreated {
         creator: NodeId,
@@ -129,6 +184,8 @@ impl SemanticEvent {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::ShellStarted { .. } => "shell_started",
+            Self::ProcessStarted { .. } => "process_started",
+            Self::StandardStreamsInitialized { .. } => "standard_streams_initialized",
             Self::PipeCreated { .. } => "pipe_created",
             Self::ProcessForked { .. } => "process_forked",
             Self::FileDescriptorDuplicated { .. } => "file_descriptor_duplicated",
@@ -145,6 +202,10 @@ impl SemanticEvent {
     pub fn summary(&self) -> String {
         match self {
             Self::ShellStarted { shell } => format!("shell {} starts", shell.label),
+            Self::ProcessStarted { process } => format!("process {} starts", process.label),
+            Self::StandardStreamsInitialized { process, terminal, .. } => {
+                format!("{} initializes standard I/O on {}", process.as_str(), terminal.label)
+            }
             Self::PipeCreated { creator, .. } => {
                 format!("{} creates an anonymous pipe and two FDs", creator.as_str())
             }
@@ -197,6 +258,20 @@ impl SemanticEvent {
     pub fn referenced_node_ids(&self) -> Vec<NodeId> {
         match self {
             Self::ShellStarted { shell } => vec![shell.id.clone()],
+            Self::ProcessStarted { process } => vec![process.id.clone()],
+            Self::StandardStreamsInitialized {
+                process,
+                terminal,
+                stdin_descriptor,
+                stdout_descriptor,
+                stderr_descriptor,
+            } => vec![
+                process.clone(),
+                terminal.id.clone(),
+                stdin_descriptor.id.clone(),
+                stdout_descriptor.id.clone(),
+                stderr_descriptor.id.clone(),
+            ],
             Self::PipeCreated {
                 creator,
                 pipe,
@@ -323,6 +398,42 @@ impl ReplayEngine {
         let evidence = &envelope.evidence;
         match &envelope.event {
             SemanticEvent::ShellStarted { shell } => self.add_node(shell.clone()),
+            SemanticEvent::ProcessStarted { process } => self.add_node(process.clone()),
+            SemanticEvent::StandardStreamsInitialized {
+                process,
+                terminal,
+                stdin_descriptor,
+                stdout_descriptor,
+                stderr_descriptor,
+            } => {
+                self.require_node(process)?;
+                if !self.graph.nodes.iter().any(|n| n.id == terminal.id) {
+                    require_kind(terminal, NodeKind::Terminal)?;
+                    self.add_node(terminal.clone())?;
+                }
+                self.add_descriptor(process, stdin_descriptor.clone(), &terminal.id, evidence)?;
+                self.add_edge(
+                    stdin_descriptor.id.clone(),
+                    terminal.id.clone(),
+                    RelationKind::ReadsFrom,
+                    evidence,
+                )?;
+                self.add_descriptor(process, stdout_descriptor.clone(), &terminal.id, evidence)?;
+                self.add_edge(
+                    stdout_descriptor.id.clone(),
+                    terminal.id.clone(),
+                    RelationKind::WritesTo,
+                    evidence,
+                )?;
+                self.add_descriptor(process, stderr_descriptor.clone(), &terminal.id, evidence)?;
+                self.add_edge(
+                    stderr_descriptor.id.clone(),
+                    terminal.id.clone(),
+                    RelationKind::WritesTo,
+                    evidence,
+                )?;
+                Ok(())
+            }
             SemanticEvent::PipeCreated {
                 creator,
                 pipe,
@@ -385,6 +496,22 @@ impl ReplayEngine {
                         &target,
                         evidence,
                     )?;
+                    if self.has_specific_relation(&inherited.from_parent, &target, RelationKind::ReadsFrom) {
+                        self.add_edge(
+                            inherited.child_descriptor.id.clone(),
+                            target.clone(),
+                            RelationKind::ReadsFrom,
+                            evidence,
+                        )?;
+                    }
+                    if self.has_specific_relation(&inherited.from_parent, &target, RelationKind::WritesTo) {
+                        self.add_edge(
+                            inherited.child_descriptor.id.clone(),
+                            target.clone(),
+                            RelationKind::WritesTo,
+                            evidence,
+                        )?;
+                    }
                 }
                 Ok(())
             }
@@ -394,7 +521,24 @@ impl ReplayEngine {
                 to_descriptor,
             } => {
                 let target = self.descriptor_target(process, from_descriptor)?;
-                self.add_descriptor(process, to_descriptor.clone(), &target, evidence)
+                self.add_descriptor(process, to_descriptor.clone(), &target, evidence)?;
+                if self.has_specific_relation(from_descriptor, &target, RelationKind::ReadsFrom) {
+                    self.add_edge(
+                        to_descriptor.id.clone(),
+                        target.clone(),
+                        RelationKind::ReadsFrom,
+                        evidence,
+                    )?;
+                }
+                if self.has_specific_relation(from_descriptor, &target, RelationKind::WritesTo) {
+                    self.add_edge(
+                        to_descriptor.id.clone(),
+                        target.clone(),
+                        RelationKind::WritesTo,
+                        evidence,
+                    )?;
+                }
+                Ok(())
             }
             SemanticEvent::FileDescriptorClosed {
                 process,
@@ -418,14 +562,33 @@ impl ReplayEngine {
                 access,
             } => {
                 self.require_node(process)?;
-                require_kind(file, NodeKind::RegularFile)?;
-                self.add_node(file.clone())?;
+                if !self.graph.nodes.iter().any(|n| n.id == file.id) {
+                    if !matches!(
+                        file.kind,
+                        NodeKind::RegularFile | NodeKind::Directory | NodeKind::Terminal
+                    ) {
+                        return Err(ReplayError::WrongNodeKind {
+                            node: file.id.clone(),
+                            expected: NodeKind::RegularFile,
+                            actual: file.kind.clone(),
+                        });
+                    }
+                    self.add_node(file.clone())?;
+                }
                 self.add_descriptor(process, descriptor.clone(), &file.id, evidence)?;
-                let relation = match access {
-                    FileAccess::ReadOnly => RelationKind::ReadsFrom,
-                    FileAccess::WriteOnly => RelationKind::WritesTo,
-                };
-                self.add_edge(descriptor.id.clone(), file.id.clone(), relation, evidence)
+                match access {
+                    FileAccess::ReadOnly => {
+                        self.add_edge(descriptor.id.clone(), file.id.clone(), RelationKind::ReadsFrom, evidence)?;
+                    }
+                    FileAccess::WriteOnly => {
+                        self.add_edge(descriptor.id.clone(), file.id.clone(), RelationKind::WritesTo, evidence)?;
+                    }
+                    FileAccess::ReadWrite => {
+                        self.add_edge(descriptor.id.clone(), file.id.clone(), RelationKind::ReadsFrom, evidence)?;
+                        self.add_edge(descriptor.id.clone(), file.id.clone(), RelationKind::WritesTo, evidence)?;
+                    }
+                }
+                Ok(())
             }
             SemanticEvent::BytesRead {
                 process,
@@ -436,7 +599,7 @@ impl ReplayEngine {
                 let target = self.descriptor_target(process, descriptor)?;
                 let target_node = self.require_node(&target)?;
                 match target_node.kind {
-                    NodeKind::RegularFile
+                    NodeKind::RegularFile | NodeKind::Directory
                         if self.has_specific_relation(
                             descriptor,
                             &target,
@@ -450,6 +613,15 @@ impl ReplayEngine {
                     {
                         Ok(())
                     }
+                    NodeKind::Terminal
+                        if self.has_specific_relation(
+                            descriptor,
+                            &target,
+                            RelationKind::ReadsFrom,
+                        ) =>
+                    {
+                        Ok(())
+                    }
                     _ => Err(ReplayError::InvalidReadTarget(target)),
                 }
             }
@@ -460,10 +632,32 @@ impl ReplayEngine {
             } => {
                 require_positive_bytes(*byte_count)?;
                 let target = self.descriptor_target(process, descriptor)?;
-                if self.has_relation(&target, RelationKind::WriteEndOf) {
-                    Ok(())
-                } else {
-                    Err(ReplayError::InvalidWriteTarget(target))
+                let target_node = self.require_node(&target)?;
+                match target_node.kind {
+                    NodeKind::RegularFile
+                        if self.has_specific_relation(
+                            descriptor,
+                            &target,
+                            RelationKind::WritesTo,
+                        ) =>
+                    {
+                        Ok(())
+                    }
+                    NodeKind::PipeEndpoint
+                        if self.has_relation(&target, RelationKind::WriteEndOf) =>
+                    {
+                        Ok(())
+                    }
+                    NodeKind::Terminal
+                        if self.has_specific_relation(
+                            descriptor,
+                            &target,
+                            RelationKind::WritesTo,
+                        ) =>
+                    {
+                        Ok(())
+                    }
+                    _ => Err(ReplayError::InvalidWriteTarget(target)),
                 }
             }
             SemanticEvent::ProcessExited { process, .. } => {
@@ -714,6 +908,37 @@ pub enum ReplayError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PresentationScenario;
+
+    #[test]
+    fn all_five_scenarios_replay_deterministically_with_same_reducer() {
+        let scenarios = ReplayScenario::all_scenarios().expect("all 5 fixtures must deserialize");
+        assert_eq!(scenarios.len(), 5);
+
+        for scenario in &scenarios {
+            let first = ReplayEngine::replay(scenario)
+                .unwrap_or_else(|e| panic!("scenario {} failed replay: {:?}", scenario.id, e));
+            let second = ReplayEngine::replay(scenario)
+                .unwrap_or_else(|e| panic!("scenario {} failed second replay: {:?}", scenario.id, e));
+
+            assert_eq!(first, second, "replay of {} must be deterministic", scenario.id);
+            assert_eq!(first.len(), scenario.events.len());
+            assert_eq!(
+                first.last().unwrap().graph.revision,
+                scenario.events.len() as u64
+            );
+
+            // Invariant: after process exit, all descriptors belonging to that process are gone
+            for frame in &first {
+                frame.graph.validate().expect("graph must be valid at every frame");
+            }
+
+            // Invariant: neutral presentation contract converts cleanly
+            let presentation = PresentationScenario::from_replay(scenario, &first);
+            assert_eq!(presentation.frames.len(), scenario.events.len());
+            assert_eq!(presentation.scenario_id, scenario.id);
+        }
+    }
 
     #[test]
     fn cat_grep_fixture_replays_deterministically() {
@@ -785,5 +1010,201 @@ mod tests {
             ReplayEngine::new().apply(event),
             Err(ReplayError::MissingEvidence(1))
         );
+    }
+
+    #[test]
+    fn ordering_handling_rejects_out_of_order_sequences() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let mut engine = ReplayEngine::new();
+        engine.apply(scenario.events[0].clone()).unwrap();
+
+        // Sequence jump: expecting 2, but provide 5
+        let mut skipped = scenario.events[1].clone();
+        skipped.sequence = 5;
+        assert_eq!(
+            engine.apply(skipped),
+            Err(ReplayError::OutOfOrder {
+                expected: 2,
+                actual: 5
+            })
+        );
+
+        // Time went backward
+        let mut backward = scenario.events[1].clone();
+        backward.sequence = 2;
+        backward.monotonic_time_ns = 500; // was 1000 in event 0
+        assert_eq!(
+            engine.apply(backward),
+            Err(ReplayError::TimeWentBackward(2))
+        );
+    }
+
+    #[test]
+    fn fd_ownership_isolation_prevents_cross_process_access() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let mut engine = ReplayEngine::new();
+        // Apply shell, pipe, and cat fork
+        for event in &scenario.events[..3] {
+            engine.apply(event.clone()).unwrap();
+        }
+
+        // Try to close shell's FD (fd:shell:10) from cat process
+        let malicious_close = SemanticEventEnvelope {
+            schema_version: SEMANTIC_SCHEMA_VERSION.to_owned(),
+            sequence: 4,
+            monotonic_time_ns: 4000,
+            stage: ReplayStage::FileDescriptorRedirection,
+            evidence: vec![EvidenceRef {
+                source_id: "test".to_owned(),
+                sequence: 4,
+            }],
+            event: SemanticEvent::FileDescriptorClosed {
+                process: NodeId::new("process:cat").unwrap(),
+                descriptor: NodeId::new("fd:shell:10").unwrap(),
+            },
+        };
+
+        assert_eq!(
+            engine.apply(malicious_close),
+            Err(ReplayError::DescriptorNotOwned {
+                process: NodeId::new("process:cat").unwrap(),
+                descriptor: NodeId::new("fd:shell:10").unwrap(),
+            })
+        );
+    }
+
+    #[test]
+    fn pipe_data_direction_enforces_read_write_separation() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let mut engine = ReplayEngine::new();
+        for event in &scenario.events[..3] {
+            engine.apply(event.clone()).unwrap();
+        }
+
+        // Attempt to write to read-end descriptor (fd:cat:10 refers to pipe:1:read)
+        let invalid_write = SemanticEventEnvelope {
+            schema_version: SEMANTIC_SCHEMA_VERSION.to_owned(),
+            sequence: 4,
+            monotonic_time_ns: 4000,
+            stage: ReplayStage::PipeIo,
+            evidence: vec![EvidenceRef {
+                source_id: "test".to_owned(),
+                sequence: 4,
+            }],
+            event: SemanticEvent::BytesWritten {
+                process: NodeId::new("process:cat").unwrap(),
+                descriptor: NodeId::new("fd:cat:10").unwrap(),
+                byte_count: 32,
+            },
+        };
+
+        assert_eq!(
+            engine.apply(invalid_write),
+            Err(ReplayError::InvalidWriteTarget(
+                NodeId::new("pipe:1:read").unwrap()
+            ))
+        );
+
+        // Attempt to read from write-end descriptor (fd:cat:11 refers to pipe:1:write)
+        let invalid_read = SemanticEventEnvelope {
+            schema_version: SEMANTIC_SCHEMA_VERSION.to_owned(),
+            sequence: 4,
+            monotonic_time_ns: 4000,
+            stage: ReplayStage::PipeIo,
+            evidence: vec![EvidenceRef {
+                source_id: "test".to_owned(),
+                sequence: 4,
+            }],
+            event: SemanticEvent::BytesRead {
+                process: NodeId::new("process:cat").unwrap(),
+                descriptor: NodeId::new("fd:cat:11").unwrap(),
+                byte_count: 32,
+            },
+        };
+
+        assert_eq!(
+            engine.apply(invalid_read),
+            Err(ReplayError::InvalidReadTarget(
+                NodeId::new("pipe:1:write").unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn fork_exec_lifecycle_preserves_pid_and_hierarchy() {
+        let scenario = ReplayScenario::embedded_echo_redirection().unwrap();
+        let frames = ReplayEngine::replay(&scenario).unwrap();
+
+        // Fork is event 3
+        let fork_frame = &frames[2];
+        let parent_of_edge = fork_frame
+            .graph
+            .edges
+            .iter()
+            .find(|e| e.relation == RelationKind::ParentOf)
+            .expect("fork must establish ParentOf relation");
+        assert_eq!(parent_of_edge.from.as_str(), "process:shell");
+        assert_eq!(parent_of_edge.to.as_str(), "process:echo");
+
+        // Exec is event 7
+        let exec_frame = &frames[6];
+        let echo_node = exec_frame
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.id.as_str() == "process:echo")
+            .expect("process:echo must retain its PID/NodeId after exec");
+        assert_eq!(echo_node.kind, NodeKind::Process);
+    }
+
+    #[test]
+    fn unique_ids_prevent_duplicate_nodes() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let mut engine = ReplayEngine::new();
+        engine.apply(scenario.events[0].clone()).unwrap();
+
+        // Attempt to add another node with the same ID
+        let duplicate_start = SemanticEventEnvelope {
+            schema_version: SEMANTIC_SCHEMA_VERSION.to_owned(),
+            sequence: 2,
+            monotonic_time_ns: 2000,
+            stage: ReplayStage::Shell,
+            evidence: vec![EvidenceRef {
+                source_id: "test".to_owned(),
+                sequence: 2,
+            }],
+            event: SemanticEvent::ShellStarted {
+                shell: SemanticNode {
+                    id: NodeId::new("process:shell").unwrap(),
+                    kind: NodeKind::Shell,
+                    label: "second sh".to_owned(),
+                },
+            },
+        };
+
+        assert_eq!(
+            engine.apply(duplicate_start),
+            Err(ReplayError::DuplicateNode(
+                NodeId::new("process:shell").unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn presentation_contract_is_renderer_neutral() {
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let frames = ReplayEngine::replay(&scenario).unwrap();
+        let presentation = PresentationScenario::from_replay(&scenario, &frames);
+
+        assert_eq!(presentation.scenario_id, "cat-file-pipe-grep-v1");
+        assert_eq!(presentation.frames.len(), 22);
+
+        for frame in &presentation.frames {
+            assert!(!frame.summary.is_empty());
+            assert!(!frame.focus_candidates.is_empty());
+            assert!(!frame.evidence_provenance.is_empty());
+            // Invariant: Snapshot has entities and relations
+            assert!(frame.snapshot.revision > 0);
+        }
     }
 }

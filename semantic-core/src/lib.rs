@@ -6,8 +6,10 @@ use std::collections::HashSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod presentation;
 mod replay;
 
+pub use presentation::*;
 pub use replay::*;
 
 pub const SEMANTIC_SCHEMA_VERSION: &str = "1.0.0";
@@ -40,6 +42,8 @@ pub enum NodeKind {
     FileDescriptorEntry,
     OpenFileDescription,
     RegularFile,
+    Terminal,
+    Directory,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
