@@ -63,23 +63,24 @@ export interface LearningShellProps {
   readonly replay: ReplayViewModel;
   readonly infoCard: InfoCardView;
   readonly selectedEntity: string;
-  readonly cameraMode?: "gentle" | "auto" | "free";
-  readonly playbackSpeed?: number;
-  readonly availableScenarios?: readonly ScenarioChoice[];
-  readonly currentScenarioId?: string;
+  readonly cameraMode?: "gentle" | "auto" | "free" | undefined;
+  readonly playbackSpeed?: number | undefined;
+  readonly availableScenarios?: readonly ScenarioChoice[] | undefined;
+  readonly currentScenarioId?: string | undefined;
   readonly telemetry: TelemetryView;
   readonly terminalOpen: boolean;
   readonly terminalInput: string;
   readonly terminalLines: readonly string[];
-  readonly allEvents?: readonly EventBoardItem[];
-  readonly onJumpToFrame?: (index: number) => void;
-  readonly audioMuted?: boolean;
-  readonly audioVolume?: number;
-  readonly onToggleMute?: () => void;
-  readonly onVolumeChange?: (volume: number) => void;
-  readonly onCameraModeChange?: (mode: "gentle" | "auto" | "free") => void;
-  readonly onPlaybackSpeedChange?: (speed: number) => void;
-  readonly onSelectScenario?: (id: string) => void;
+  readonly allEvents?: readonly EventBoardItem[] | undefined;
+  readonly onJumpToFrame?: ((index: number) => void) | undefined;
+  readonly onHoverEntity?: ((entityId: string | null) => void) | undefined;
+  readonly audioMuted?: boolean | undefined;
+  readonly audioVolume?: number | undefined;
+  readonly onToggleMute?: (() => void) | undefined;
+  readonly onVolumeChange?: ((volume: number) => void) | undefined;
+  readonly onCameraModeChange?: ((mode: "gentle" | "auto" | "free") => void) | undefined;
+  readonly onPlaybackSpeedChange?: ((speed: number) => void) | undefined;
+  readonly onSelectScenario?: ((id: string) => void) | undefined;
   readonly onTerminalInputChange: (value: string) => void;
   readonly onTerminalSubmit: (event: FormEvent<HTMLFormElement>) => void;
   readonly onToggleTerminal: () => void;
@@ -136,6 +137,42 @@ function getPhaseTitle(stage: string): string {
   }
 }
 
+// ─── Causal Lane Helper ──────────────────────────────────────────
+type CausalLaneId = "SHELL" | "PROCESS_1" | "PIPE" | "PROCESS_2" | "FILESYSTEM" | "TERMINAL";
+
+interface CausalLaneDef {
+  id: CausalLaneId;
+  label: string;
+  color: string;
+}
+
+function getEventLanes(event: EventBoardItem): CausalLaneId[] {
+  const k = event.eventKind;
+  const s = event.stage;
+
+  if (k === "shell_started") return ["SHELL"];
+  if (k === "standard_streams_initialized") return ["SHELL", "TERMINAL"];
+  if (k === "pipe_created") return ["SHELL", "PIPE"];
+  if (k === "process_forked") return ["SHELL", "PROCESS_1"];
+  if (k === "file_descriptor_duplicated" || k === "file_descriptor_closed" || k === "process_executed") {
+    return ["PROCESS_1"];
+  }
+  if (k === "file_opened") return ["FILESYSTEM", "PROCESS_1"];
+  if (k === "bytes_read") {
+    if (s === "pipe_io") return ["PIPE", "PROCESS_2"];
+    return ["FILESYSTEM", "PROCESS_1"];
+  }
+  if (k === "bytes_written") {
+    if (s === "pipe_io") return ["PROCESS_1", "PIPE"];
+    if (s === "terminal_io") return ["PROCESS_2", "TERMINAL"];
+    return ["PROCESS_1", "FILESYSTEM"];
+  }
+  if (k === "process_exited") return ["PROCESS_1"];
+  if (k === "process_waited") return ["SHELL", "PROCESS_1"];
+
+  return ["SHELL"];
+}
+
 export function LearningShell({
   scene,
   replay,
@@ -151,6 +188,7 @@ export function LearningShell({
   terminalLines,
   allEvents = [],
   onJumpToFrame,
+  onHoverEntity,
   audioMuted = false,
   audioVolume = 0.55,
   onToggleMute,
@@ -170,7 +208,8 @@ export function LearningShell({
   const atEnd = replay.frameCount > 0 && replay.frameIndex + 1 >= replay.frameCount;
   const progress = replay.frameCount > 1 ? (replay.frameIndex / (replay.frameCount - 1)) * 100 : 0;
 
-  // Event Board collapsible state
+  // View Mode: 'lanes' (Causal Matrix) vs 'timeline' (List)
+  const [boardViewMode, setBoardViewMode] = useState<"lanes" | "timeline">("lanes");
   const [eventBoardCollapsed, setEventBoardCollapsed] = useState(false);
   const activeItemRef = useRef<HTMLDivElement>(null);
   const listContainerRef = useRef<HTMLDivElement>(null);
@@ -182,7 +221,7 @@ export function LearningShell({
     }
   }, [replay.frameIndex, eventBoardCollapsed]);
 
-  // Group events by phase
+  // Group events by phase for timeline view
   const groupedEvents = useMemo(() => {
     const groups: Array<{ phaseTitle: string; items: EventBoardItem[] }> = [];
     let currentPhase = "";
@@ -208,13 +247,36 @@ export function LearningShell({
     return groups;
   }, [allEvents]);
 
+  // Determine dynamic label for process 1 & process 2
+  const process1Name = useMemo(() => {
+    if (currentScenarioId?.includes("grep")) return "CAT";
+    if (currentScenarioId?.includes("echo")) return "ECHO";
+    if (currentScenarioId?.includes("ls")) return "LS";
+    if (currentScenarioId?.includes("ps")) return "PS";
+    return "TIẾN TRÌNH 1";
+  }, [currentScenarioId]);
+
+  const process2Name = useMemo(() => {
+    if (currentScenarioId?.includes("grep")) return "GREP";
+    return "TIẾN TRÌNH 2";
+  }, [currentScenarioId]);
+
+  const causalLanes: readonly CausalLaneDef[] = useMemo(() => [
+    { id: "SHELL", label: "SHELL [sh]", color: "#2563eb" },
+    { id: "PROCESS_1", label: process1Name, color: "#d97706" },
+    { id: "PIPE", label: "PIPE [ống]", color: "#0d9488" },
+    { id: "PROCESS_2", label: process2Name, color: "#059669" },
+    { id: "FILESYSTEM", label: "TẬP TIN [vfs]", color: "#4f46e5" },
+    { id: "TERMINAL", label: "TERMINAL [tty]", color: "#0d9488" },
+  ], [process1Name, process2Name]);
+
   // Draggable terminal state
   const [terminalPos, setTerminalPos] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = sessionStorage.getItem("linux_obs_terminal_pos");
       if (saved) return JSON.parse(saved);
     } catch {}
-    return { x: 32, y: 92 };
+    return { x: 32, y: 80 };
   });
 
   const isDragging = useRef(false);
@@ -260,7 +322,7 @@ export function LearningShell({
 
         <div className="evidence-state">
           <span className="pulse-dot" aria-hidden="true" />
-          MÔ PHỎNG NGỮ NGHĨA — KHÔNG PHẢI LINUX TRỰC TIẾP
+          MÔ PHỎNG NGỮ NGHĨA — SYNTHETIC FIXTURE
         </div>
 
         <div className="top-controls">
@@ -271,7 +333,7 @@ export function LearningShell({
                 type="button"
                 className={`audio-btn ${audioMuted ? "muted" : "active"}`}
                 onClick={onToggleMute}
-                title={audioMuted ? "Bật âm thanh (Unmute)" : "Tắt âm thanh (Mute)"}
+                title={audioMuted ? "Bật âm thanh" : "Tắt âm thanh"}
               >
                 {audioMuted ? "🔇 TẮT" : `🔊 ${Math.round(audioVolume * 100)}%`}
               </button>
@@ -322,24 +384,42 @@ export function LearningShell({
         </div>
       </header>
 
-      {/* Full Event Board HUD */}
+      {/* Mission Control Event Board (Causal Lanes + Timeline) */}
       <aside className={`event-board ${eventBoardCollapsed ? "collapsed" : ""}`} aria-live="polite">
         <div className="event-board-header">
           <div className="event-board-title">
-            <p className="hud-label">CHUỖI TIẾN TRÌNH SỰ KIỆN</p>
+            <p className="hud-label">TIẾN TRÌNH SỰ KIỆN</p>
             <div className="frame-sequence">
               <strong>{String(replay.current?.sequence ?? 0).padStart(2, "0")}</strong>
               <span>/ {String(replay.frameCount).padStart(2, "0")}</span>
             </div>
           </div>
-          <button
-            type="button"
-            className="collapse-btn"
-            onClick={() => setEventBoardCollapsed((c) => !c)}
-            title={eventBoardCollapsed ? "Mở rộng bảng sự kiện" : "Thu gọn bảng sự kiện"}
-          >
-            {eventBoardCollapsed ? "＋ MỞ RỘNG" : "− THU GỌN"}
-          </button>
+          <div className="board-header-actions">
+            <button
+              type="button"
+              className={`view-mode-pill ${boardViewMode === "lanes" ? "active" : ""}`}
+              onClick={() => setBoardViewMode("lanes")}
+              title="Xem ma trận tuyến nhân quả"
+            >
+              TUYẾN
+            </button>
+            <button
+              type="button"
+              className={`view-mode-pill ${boardViewMode === "timeline" ? "active" : ""}`}
+              onClick={() => setBoardViewMode("timeline")}
+              title="Xem danh sách chi tiết"
+            >
+              DANH SÁCH
+            </button>
+            <button
+              type="button"
+              className="collapse-btn"
+              onClick={() => setEventBoardCollapsed((c) => !c)}
+              title={eventBoardCollapsed ? "Mở rộng" : "Thu gọn"}
+            >
+              {eventBoardCollapsed ? "＋" : "−"}
+            </button>
+          </div>
         </div>
 
         {/* Current Active Event Highlight Card */}
@@ -354,8 +434,52 @@ export function LearningShell({
           </div>
         )}
 
-        {/* Full Event Timeline / Board */}
-        {!eventBoardCollapsed && allEvents.length > 0 && (
+        {/* CAUSAL LANES VIEW */}
+        {!eventBoardCollapsed && boardViewMode === "lanes" && allEvents.length > 0 && (
+          <div className="causal-lanes-container">
+            <div className="lanes-track-list">
+              {causalLanes.map((lane) => (
+                <div key={lane.id} className="causal-lane-row">
+                  <div className="lane-label" style={{ borderLeftColor: lane.color }}>
+                    {lane.label}
+                  </div>
+                  <div className="lane-timeline-track">
+                    <div className="lane-guide-line" />
+                    {allEvents.map((ev) => {
+                      const involvedLanes = getEventLanes(ev);
+                      const isNodeInLane = involvedLanes.includes(lane.id);
+                      const isCurrent = ev.status === "current";
+
+                      if (!isNodeInLane) {
+                        return <div key={ev.index} className="lane-slot empty" />;
+                      }
+
+                      return (
+                        <div
+                          key={ev.index}
+                          className={`lane-slot node ${ev.status} ${isCurrent ? "pulse" : ""}`}
+                          onClick={() => onJumpToFrame?.(ev.index)}
+                          onMouseEnter={() => onHoverEntity?.(lane.id.toLowerCase())}
+                          onMouseLeave={() => onHoverEntity?.(null)}
+                          title={`#${ev.sequence}: ${ev.summary}`}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <span className="node-badge" style={{ borderColor: lane.color }}>
+                            {ev.sequence}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* TIMELINE LIST VIEW */}
+        {!eventBoardCollapsed && boardViewMode === "timeline" && allEvents.length > 0 && (
           <div className="timeline-event-list" ref={listContainerRef}>
             {groupedEvents.map((group) => (
               <div key={group.phaseTitle} className="timeline-phase-group">
@@ -378,7 +502,7 @@ export function LearningShell({
                           <div className="event-item-top">
                             <span className="event-kind-pill">{ev.eventKind}</span>
                             <span className="event-status-pill">
-                              {ev.status === "past" ? "✓ ĐÃ XONG" : ev.status === "current" ? "● HIỆN TẠI" : "○ CHỜ"}
+                              {ev.status === "past" ? "✓ XONG" : ev.status === "current" ? "● HIỆN TẠI" : "○ CHỜ"}
                             </span>
                           </div>
                           <p className="event-summary-text">{ev.summary}</p>

@@ -1207,4 +1207,33 @@ mod tests {
             assert!(frame.snapshot.revision > 0);
         }
     }
+
+    #[test]
+    fn process_lifecycle_persists_as_exited_across_subsequent_wait_frames() {
+        use crate::EntityLifecycle;
+
+        let scenario = ReplayScenario::embedded_cat_grep().unwrap();
+        let frames = ReplayEngine::replay(&scenario).unwrap();
+        let presentation = PresentationScenario::from_replay(&scenario, &frames);
+
+        // In cat-grep scenario, cat exits before grep exits, and shell waits for them
+        // Find the frame where cat exits
+        let cat_exit_idx = presentation
+            .frames
+            .iter()
+            .position(|f| f.event_kind == "process_exited" && f.focus_candidates.contains(&"process:cat".to_string()))
+            .expect("must have cat exit frame");
+
+        // Verify that in all frames AFTER cat exit, cat's lifecycle is still Exited
+        for frame in &presentation.frames[cat_exit_idx..] {
+            if let Some(cat_entity) = frame.entities.iter().find(|e| e.id == "process:cat") {
+                assert!(
+                    matches!(cat_entity.lifecycle, EntityLifecycle::Exited { .. }),
+                    "cat entity at sequence {} must remain Exited, found {:?}",
+                    frame.sequence,
+                    cat_entity.lifecycle
+                );
+            }
+        }
+    }
 }

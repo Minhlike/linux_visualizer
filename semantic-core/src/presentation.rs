@@ -92,6 +92,8 @@ impl PresentationScenario {
     ) -> Self {
         let mut presentation_frames = Vec::with_capacity(frames.len());
         let mut previous_graph = SemanticGraph::empty();
+        let mut persistent_lifecycles = std::collections::HashMap::<String, EntityLifecycle>::new();
+        let mut entity_provenance = std::collections::HashMap::<String, Vec<EvidenceRef>>::new();
 
         for frame in frames {
             let focus_candidates: Vec<String> = frame
@@ -102,18 +104,63 @@ impl PresentationScenario {
                 .map(|id| id.as_str().to_owned())
                 .collect();
 
+            // Update lifecycles and provenance for affected nodes in current event
+            match &frame.envelope.event {
+                crate::SemanticEvent::ProcessExited { process, status } => {
+                    persistent_lifecycles.insert(
+                        process.as_str().to_owned(),
+                        EntityLifecycle::Exited { status: *status },
+                    );
+                }
+                crate::SemanticEvent::FileDescriptorClosed { descriptor, .. } => {
+                    persistent_lifecycles.insert(
+                        descriptor.as_str().to_owned(),
+                        EntityLifecycle::Closed,
+                    );
+                }
+                crate::SemanticEvent::ProcessExecuted { process, .. } => {
+                    // Only transition to Executing if not already exited
+                    if !matches!(
+                        persistent_lifecycles.get(process.as_str()),
+                        Some(EntityLifecycle::Exited { .. })
+                    ) {
+                        persistent_lifecycles.insert(
+                            process.as_str().to_owned(),
+                            EntityLifecycle::Executing,
+                        );
+                    }
+                }
+                _ => {}
+            }
+
+            // Record provenance for nodes referenced in this event
+            for node_id in &focus_candidates {
+                entity_provenance
+                    .entry(node_id.clone())
+                    .or_insert_with(|| frame.envelope.evidence.clone());
+            }
+
             // Derive lifecycle for each node in current graph
             let current_entities: Vec<SemanticEntityPresentation> = frame
                 .graph
                 .nodes
                 .iter()
                 .map(|node| {
-                    let lifecycle = derive_lifecycle(node.id.as_str(), &frame.envelope.event);
-                    let provenance = frame.envelope.evidence.clone();
+                    let id_str = node.id.as_str();
+                    let lifecycle = persistent_lifecycles
+                        .get(id_str)
+                        .cloned()
+                        .unwrap_or(EntityLifecycle::Active);
+
+                    let provenance = entity_provenance
+                        .get(id_str)
+                        .cloned()
+                        .unwrap_or_else(|| frame.envelope.evidence.clone());
+
                     let confidence = ClaimConfidence::Inferred;
 
                     SemanticEntityPresentation {
-                        id: node.id.as_str().to_owned(),
+                        id: id_str.to_owned(),
                         kind: node.kind.clone(),
                         label: node.label.clone(),
                         lifecycle,
@@ -219,26 +266,5 @@ impl PresentationScenario {
             caveat: scenario.caveat.clone(),
             frames: presentation_frames,
         }
-    }
-}
-
-fn derive_lifecycle(node_id: &str, event: &crate::SemanticEvent) -> EntityLifecycle {
-    match event {
-        crate::SemanticEvent::ProcessExited { process, status }
-            if process.as_str() == node_id =>
-        {
-            EntityLifecycle::Exited { status: *status }
-        }
-        crate::SemanticEvent::FileDescriptorClosed { descriptor, .. }
-            if descriptor.as_str() == node_id =>
-        {
-            EntityLifecycle::Closed
-        }
-        crate::SemanticEvent::ProcessExecuted { process, .. }
-            if process.as_str() == node_id =>
-        {
-            EntityLifecycle::Executing
-        }
-        _ => EntityLifecycle::Active,
     }
 }
