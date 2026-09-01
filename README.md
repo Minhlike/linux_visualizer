@@ -2,19 +2,27 @@
 
 Linux Observatory is a research-oriented desktop application for teaching operating-system concepts through runtime-grounded, semantically constrained visualization.
 
-It is not a 3D city generator. The semantic graph is the source of truth; city, truth-graph, and dual views are projections whose interpretations are bounded by explicit fidelity contracts.
+It is not a command executor or a 3D city generator. The semantic graph is the source of truth; the daylight Mechanical Plant is a disposable projection bounded by explicit fidelity contracts.
 
-## Current milestone
+## What it understands
 
-P0 established the repository, architecture boundaries, machine-readable fidelity contracts, CI, and a minimal Tauri 2 + React shell. P1 adds a deterministic, explicitly synthetic replay of `cat file.txt | grep linux` through a validated semantic graph. See [`docs/STATE.md`](docs/STATE.md).
+The desktop terminal parses a deliberately small, non-executing shell grammar: executable/arguments, pipelines (`|`), input/output/append redirection (`<`, `>`, `>>`), background (`&`), and safe structural chaining (`&&`, `||`, `;`). Parsed commands become a `CommandGraph`, typed semantic actions, `ActionContext`, and one canonical `ActionPlan`. Input is never interpolated into a host shell.
+
+Every command is labelled at one of three fidelity levels:
+
+- **Level A — Evidence-grounded:** a validated semantic fixture or future live evidence exists. Current built-in fixtures remain explicitly synthetic, not live kernel traces.
+- **Level B — Structurally derived:** the executable has a semantic adapter and shell structure is known, but no runtime trace exists. The UI states: “SUY DIỄN TỪ CẤU TRÚC LỆNH — KHÔNG PHẢI TRACE KERNEL.”
+- **Level C — Opaque command:** the shell can show spawn/exec and declared stdin/stdout/pipeline/redirection, while the program body stays closed. The UI states: “Nội bộ chương trình chưa được quan sát.”
+
+Linux Observatory can generally visualize shell execution structure and known Linux primitives; executable internals are described only when evidence or a semantic adapter exists.
 
 ## Architecture
 
 - `runtime-observer/`: normalized evidence from Linux runtime sources
-- `semantic-core/`: renderer-independent Linux semantic graph
+- `semantic-core/`: renderer-independent Linux semantic graph, shell structure parser, planner, reducer, typed presentation contract
 - `fidelity-engine/`: contract validation and misconception guardrails
-- `renderer/`: projection interface; Three.js integration starts in P2
-- `camera-director/`: semantic focus requests, independent of scene implementation
+- `renderer/`: React Three Fiber/Three.js Mechanical Plant projection and honest display telemetry
+- `camera-director/`: the canonical typed `ActionContext -> ActionPlan` resolver and camera policy
 - `learning-ui/`: learner-facing React components
 - `apps/desktop/`: Tauri composition root
 - `experiments/`: study designs and analysis artifacts

@@ -16,6 +16,8 @@ pub const PS_SCENARIO_JSON: &str = include_str!("../fixtures/ps.json");
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceMode {
     SyntheticReplay,
+    StructurallyDerived,
+    OpaqueCommand,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -66,9 +68,10 @@ impl ReplayScenario {
 
     pub fn find_by_command(command: &str) -> Option<Self> {
         let normalized = command.trim();
-        Self::all_scenarios().ok()?.into_iter().find(|s| {
-            s.command == normalized || s.title == normalized
-        })
+        Self::all_scenarios()
+            .ok()?
+            .into_iter()
+            .find(|s| s.command == normalized || s.title == normalized)
     }
 }
 
@@ -108,6 +111,7 @@ pub struct InheritedDescriptor {
 pub enum FileAccess {
     ReadOnly,
     WriteOnly,
+    AppendOnly,
     ReadWrite,
 }
 
@@ -203,8 +207,14 @@ impl SemanticEvent {
         match self {
             Self::ShellStarted { shell } => format!("shell {} starts", shell.label),
             Self::ProcessStarted { process } => format!("process {} starts", process.label),
-            Self::StandardStreamsInitialized { process, terminal, .. } => {
-                format!("{} initializes standard I/O on {}", process.as_str(), terminal.label)
+            Self::StandardStreamsInitialized {
+                process, terminal, ..
+            } => {
+                format!(
+                    "{} initializes standard I/O on {}",
+                    process.as_str(),
+                    terminal.label
+                )
             }
             Self::PipeCreated { creator, .. } => {
                 format!("{} creates an anonymous pipe and two FDs", creator.as_str())
@@ -300,8 +310,9 @@ impl SemanticEvent {
                 process,
                 descriptor,
             } => vec![process.clone(), descriptor.clone()],
-            Self::ProcessExecuted { process, .. }
-            | Self::ProcessExited { process, .. } => vec![process.clone()],
+            Self::ProcessExecuted { process, .. } | Self::ProcessExited { process, .. } => {
+                vec![process.clone()]
+            }
             Self::FileOpened {
                 process,
                 file,
@@ -496,7 +507,11 @@ impl ReplayEngine {
                         &target,
                         evidence,
                     )?;
-                    if self.has_specific_relation(&inherited.from_parent, &target, RelationKind::ReadsFrom) {
+                    if self.has_specific_relation(
+                        &inherited.from_parent,
+                        &target,
+                        RelationKind::ReadsFrom,
+                    ) {
                         self.add_edge(
                             inherited.child_descriptor.id.clone(),
                             target.clone(),
@@ -504,7 +519,11 @@ impl ReplayEngine {
                             evidence,
                         )?;
                     }
-                    if self.has_specific_relation(&inherited.from_parent, &target, RelationKind::WritesTo) {
+                    if self.has_specific_relation(
+                        &inherited.from_parent,
+                        &target,
+                        RelationKind::WritesTo,
+                    ) {
                         self.add_edge(
                             inherited.child_descriptor.id.clone(),
                             target.clone(),
@@ -578,14 +597,34 @@ impl ReplayEngine {
                 self.add_descriptor(process, descriptor.clone(), &file.id, evidence)?;
                 match access {
                     FileAccess::ReadOnly => {
-                        self.add_edge(descriptor.id.clone(), file.id.clone(), RelationKind::ReadsFrom, evidence)?;
+                        self.add_edge(
+                            descriptor.id.clone(),
+                            file.id.clone(),
+                            RelationKind::ReadsFrom,
+                            evidence,
+                        )?;
                     }
-                    FileAccess::WriteOnly => {
-                        self.add_edge(descriptor.id.clone(), file.id.clone(), RelationKind::WritesTo, evidence)?;
+                    FileAccess::WriteOnly | FileAccess::AppendOnly => {
+                        self.add_edge(
+                            descriptor.id.clone(),
+                            file.id.clone(),
+                            RelationKind::WritesTo,
+                            evidence,
+                        )?;
                     }
                     FileAccess::ReadWrite => {
-                        self.add_edge(descriptor.id.clone(), file.id.clone(), RelationKind::ReadsFrom, evidence)?;
-                        self.add_edge(descriptor.id.clone(), file.id.clone(), RelationKind::WritesTo, evidence)?;
+                        self.add_edge(
+                            descriptor.id.clone(),
+                            file.id.clone(),
+                            RelationKind::ReadsFrom,
+                            evidence,
+                        )?;
+                        self.add_edge(
+                            descriptor.id.clone(),
+                            file.id.clone(),
+                            RelationKind::WritesTo,
+                            evidence,
+                        )?;
                     }
                 }
                 Ok(())
@@ -918,10 +957,15 @@ mod tests {
         for scenario in &scenarios {
             let first = ReplayEngine::replay(scenario)
                 .unwrap_or_else(|e| panic!("scenario {} failed replay: {:?}", scenario.id, e));
-            let second = ReplayEngine::replay(scenario)
-                .unwrap_or_else(|e| panic!("scenario {} failed second replay: {:?}", scenario.id, e));
+            let second = ReplayEngine::replay(scenario).unwrap_or_else(|e| {
+                panic!("scenario {} failed second replay: {:?}", scenario.id, e)
+            });
 
-            assert_eq!(first, second, "replay of {} must be deterministic", scenario.id);
+            assert_eq!(
+                first, second,
+                "replay of {} must be deterministic",
+                scenario.id
+            );
             assert_eq!(first.len(), scenario.events.len());
             assert_eq!(
                 first.last().unwrap().graph.revision,
@@ -930,7 +974,10 @@ mod tests {
 
             // Invariant: after process exit, all descriptors belonging to that process are gone
             for frame in &first {
-                frame.graph.validate().expect("graph must be valid at every frame");
+                frame
+                    .graph
+                    .validate()
+                    .expect("graph must be valid at every frame");
             }
 
             // Invariant: neutral presentation contract converts cleanly
@@ -1221,7 +1268,10 @@ mod tests {
         let cat_exit_idx = presentation
             .frames
             .iter()
-            .position(|f| f.event_kind == "process_exited" && f.focus_candidates.contains(&"process:cat".to_string()))
+            .position(|f| {
+                f.event_kind == "process_exited"
+                    && f.focus_candidates.contains(&"process:cat".to_string())
+            })
             .expect("must have cat exit frame");
 
         // Verify that in all frames AFTER cat exit, cat's lifecycle is still Exited
@@ -1255,7 +1305,11 @@ mod tests {
         // Frame 4: file_descriptor_duplicated on cat (shell is not in focus_candidates)
         let frame4 = &presentation.frames[3];
         assert_eq!(frame4.event_kind, "file_descriptor_duplicated");
-        assert!(!frame4.focus_candidates.contains(&"process:shell".to_string()));
+        assert!(
+            !frame4
+                .focus_candidates
+                .contains(&"process:shell".to_string())
+        );
 
         let frame4_shell = frame4
             .entities
@@ -1279,7 +1333,9 @@ mod tests {
         let close_idx = presentation
             .frames
             .iter()
-            .position(|f| f.event_kind == "file_descriptor_closed" && f.summary.contains("fd:cat:10"))
+            .position(|f| {
+                f.event_kind == "file_descriptor_closed" && f.summary.contains("fd:cat:10")
+            })
             .expect("must have fd close frame");
 
         // Verify in all subsequent frames that fd:cat:10 is NOT present in graph entities

@@ -12,9 +12,10 @@ import {
   type RenderBackend,
   type SceneTelemetry,
   type VisualEntityId,
+  type VisualCommandGraph,
   type VisualReplayFrame,
 } from "@linux-observatory/renderer";
-import { resolveActionPlan, type CameraFollowMode } from "@linux-observatory/camera-director";
+import { resolveActionPlan, type ActionContext, type CameraFollowMode, type EvidenceMode } from "@linux-observatory/camera-director";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 import catGrepSource from "../../../semantic-core/fixtures/cat-grep.json";
@@ -56,14 +57,22 @@ interface NativeReplayFrame {
     readonly entities: readonly NativeSemanticEntity[];
     readonly relations: readonly NativeSemanticRelation[];
   };
+  readonly action_context: ActionContext;
+}
+
+interface NativeCommandGraph extends VisualCommandGraph {
+  readonly raw_command: string;
+  readonly fidelity_level: "evidence_grounded" | "structurally_derived" | "opaque_command";
 }
 
 interface NativeReplayPresentation {
   readonly scenario_id: string;
   readonly title: string;
   readonly command: string;
-  readonly evidence_mode: "synthetic_replay";
+  readonly evidence_mode: EvidenceMode;
+  readonly fidelity_level: "evidence_grounded" | "structurally_derived" | "opaque_command";
   readonly caveat: string;
+  readonly command_graph: NativeCommandGraph;
   readonly frames: readonly NativeReplayFrame[];
 }
 
@@ -119,6 +128,7 @@ const entityXPositions: Readonly<Record<string, number>> = {
   pipe: 0.5,
   grep: 2.5,
   terminal: 3,
+  process: 0,
 };
 
 const eventSummaries: Readonly<Record<string, string>> = {
@@ -138,7 +148,7 @@ const eventSummaries: Readonly<Record<string, string>> = {
 };
 
 /* ── Entity info cards — honest about synthetic evidence ─────────── */
-const entityCards: Readonly<Record<VisualEntityId, InfoCardView>> = {
+const entityCards: Readonly<Record<string, InfoCardView>> = {
   overview: {
     name: "Linux Observatory Plant",
     type: "HỆ MÁY QUAN SÁT HỢP KHỐI",
@@ -216,6 +226,13 @@ const entityCards: Readonly<Record<VisualEntityId, InfoCardView>> = {
     technicalReality: "Circular buffer trong kernel RAM. Unidirectional, stream-oriented.",
     limitations: "Capacity phụ thuộc kernel config (thường 64KB nhưng không cố định).",
   },
+  process: {
+    name: "Generic Process Workcell",
+    type: "OPAQUE USER-SPACE PROCESS",
+    visualMetaphor: "Chassis tiến trình chuẩn với cổng I/O khai báo được và lõi nội bộ đóng kín.",
+    technicalReality: "Shell có thể spawn/exec và nối stdin/stdout dựa trên cấu trúc lệnh đã parse.",
+    limitations: "Nội bộ chương trình chưa được quan sát; không suy đoán syscall, thuật toán, PID hay lượng byte.",
+  },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -229,42 +246,121 @@ function collectSemanticIds(value: unknown, result = new Set<string>()): Set<str
   return result;
 }
 
+function semanticId(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string") return (value as { id: string }).id;
+  return null;
+}
+
 function browserPresentation(fixtureId: string): NativeReplayPresentation {
   const fixture = browserFixtures[fixtureId];
   if (!fixture) throw new Error(`Kịch bản "${fixtureId}" không tồn tại trong bộ fixture.`);
   const exitedProcesses = new Set<string>();
+  const descriptorTargets = new Map<string, string>();
+  const nodeKinds = new Map<string, ActionContext["target_node_kind"]>();
+  const executableByProcess = new Map<string, string>();
+  fixture.events.forEach(({ event }) => {
+    if (event.type === "process_executed") {
+      const process = semanticId(event.process);
+      if (process && typeof event.executable === "string") executableByProcess.set(process, event.executable);
+    }
+  });
+
+  const contextFor = (event: FixtureEnvelope["event"]): ActionContext => {
+    const process = semanticId(event.process);
+    const descriptor = semanticId(event.descriptor);
+    const target = descriptor ? descriptorTargets.get(descriptor) ?? null : null;
+    const base = {
+      actor: process, parent: null, child: null, executable: process ? executableByProcess.get(process) ?? null : null,
+      descriptor, descriptor_target: target, target_node_kind: target ? nodeKinds.get(target) ?? null : null,
+      source: null, destination: null, relation: null, byte_count: null, file_access: null,
+      pipeline_id: null, evidence_mode: "synthetic_replay" as const, confidence: "inferred" as const,
+    } satisfies Omit<ActionContext, "event_type">;
+    switch (event.type) {
+      case "shell_started": { const shell = semanticId(event.shell); return { ...base, event_type: "shell_start", actor: shell, source: shell, destination: shell }; }
+      case "process_started": { const actor = semanticId(event.process); return { ...base, event_type: "spawn", actor, destination: actor }; }
+      case "standard_streams_initialized": {
+        const terminal = semanticId(event.terminal);
+        for (const key of ["stdin_descriptor", "stdout_descriptor", "stderr_descriptor"] as const) { const fd = semanticId(event[key]); if (fd && terminal) descriptorTargets.set(fd, terminal); }
+        if (terminal) nodeKinds.set(terminal, "terminal");
+        return { ...base, event_type: "stream_init", source: process, destination: terminal, target_node_kind: "terminal" };
+      }
+      case "pipe_created": {
+        const pipe = semanticId(event.pipe); const read = semanticId(event.read_endpoint); const write = semanticId(event.write_endpoint);
+        const readFd = semanticId(event.read_descriptor); const writeFd = semanticId(event.write_descriptor);
+        if (pipe) nodeKinds.set(pipe, "anonymous_pipe");
+        if (read) nodeKinds.set(read, "pipe_endpoint"); if (write) nodeKinds.set(write, "pipe_endpoint");
+        if (readFd && read) descriptorTargets.set(readFd, read); if (writeFd && write) descriptorTargets.set(writeFd, write);
+        const creator = semanticId(event.creator);
+        return { ...base, event_type: "pipe_create", actor: creator, source: creator, destination: pipe, target_node_kind: "anonymous_pipe", pipeline_id: pipe };
+      }
+      case "process_forked": {
+        const parent = semanticId(event.parent); const child = semanticId(event.child);
+        const inherited = Array.isArray(event.inherited_descriptors) ? event.inherited_descriptors : [];
+        for (const item of inherited) {
+          if (!item || typeof item !== "object") continue;
+          const from = semanticId((item as Record<string, unknown>).from_parent);
+          const childFd = semanticId((item as Record<string, unknown>).child_descriptor);
+          const inheritedTarget = from ? descriptorTargets.get(from) : null;
+          if (childFd && inheritedTarget) descriptorTargets.set(childFd, inheritedTarget);
+        }
+        return { ...base, event_type: "spawn", actor: parent, parent, child, executable: child ? executableByProcess.get(child) ?? null : null, source: parent, destination: child, relation: "parent_of" };
+      }
+      case "file_descriptor_duplicated": {
+        const from = semanticId(event.from_descriptor); const to = semanticId(event.to_descriptor); const fdTarget = from ? descriptorTargets.get(from) ?? null : null;
+        if (to && fdTarget) descriptorTargets.set(to, fdTarget);
+        return { ...base, event_type: "fd_duplicate", descriptor: to, descriptor_target: fdTarget, target_node_kind: fdTarget ? nodeKinds.get(fdTarget) ?? null : null, source: from, destination: to, relation: "refers_to" };
+      }
+      case "file_descriptor_closed": return { ...base, event_type: "fd_close", source: process, destination: descriptor };
+      case "process_executed": return { ...base, event_type: "exec", executable: typeof event.executable === "string" ? event.executable : null, source: process, destination: process };
+      case "file_opened": {
+        const file = semanticId(event.file); const openedFd = semanticId(event.descriptor); const access = typeof event.access === "string" ? event.access as ActionContext["file_access"] : null;
+        if (file) nodeKinds.set(file, "regular_file"); if (openedFd && file) descriptorTargets.set(openedFd, file);
+        const reads = access === "read_only";
+        return { ...base, event_type: "open", descriptor: openedFd, descriptor_target: file, target_node_kind: "regular_file", file_access: access, source: reads ? file : process, destination: reads ? process : file, relation: reads ? "reads_from" : "writes_to" };
+      }
+      case "bytes_read": return { ...base, event_type: "read", source: target, destination: process, relation: "reads_from", byte_count: typeof event.byte_count === "number" ? event.byte_count : null };
+      case "bytes_written": return { ...base, event_type: "write", source: process, destination: target, relation: "writes_to", byte_count: typeof event.byte_count === "number" ? event.byte_count : null };
+      case "process_exited": return { ...base, event_type: "exit", source: process, destination: process };
+      case "process_waited": { const waiter = semanticId(event.waiter); const child = semanticId(event.waited_for); return { ...base, event_type: "wait", actor: waiter, parent: waiter, child, executable: child ? executableByProcess.get(child) ?? null : null, source: waiter, destination: child, relation: "waits_for" }; }
+      default: return { ...base, event_type: "unknown_internal" };
+    }
+  };
   /* Persistent lifecycle: once exited, stays exited across all subsequent frames */
+  const frames = fixture.events.map((envelope) => {
+    let actionContext = contextFor(envelope.event);
+    if (actionContext.descriptor_target && actionContext.target_node_kind === "pipe_endpoint") {
+      const pipeEvent = fixture.events.find(({ event }) => event.type === "pipe_created" && [semanticId(event.read_endpoint), semanticId(event.write_endpoint)].includes(actionContext.descriptor_target));
+      actionContext = { ...actionContext, pipeline_id: pipeEvent ? semanticId(pipeEvent.event.pipe) : null };
+    }
+    if (envelope.event.type === "process_exited") {
+      const ids = collectSemanticIds(envelope.event);
+      ids.forEach((id) => { if (id.startsWith("process:")) exitedProcesses.add(id); });
+    }
+    const ids = [...collectSemanticIds(envelope.event)];
+    const entities: readonly NativeSemanticEntity[] = ids
+      .filter((id) => !id.startsWith("fd:"))
+      .map((id) => ({ id, kind: id.split(":")[0] || "unknown", label: id, lifecycle: exitedProcesses.has(id) ? { exited: { status: 0 } } : "active" }));
+    return {
+      sequence: envelope.sequence, stage: envelope.stage, event_kind: envelope.event.type,
+      summary: eventSummaries[envelope.event.type] ?? envelope.event.type.replaceAll("_", " "),
+      entities, relations: [] as const, focus_candidates: ids.filter((id) => !id.startsWith("fd:")),
+      snapshot: { revision: envelope.sequence, entities, relations: [] as const }, action_context: actionContext,
+    };
+  });
+  const processes = [...executableByProcess].map(([id, executable]) => ({
+    id, executable, semantic_adapter: ["cat", "grep", "echo", "ls", "ps"].includes(executable.replaceAll("\\", "/").split("/").pop() ?? "") ? executable.replaceAll("\\", "/").split("/").pop() ?? null : null,
+    opaque_internals: false,
+  }));
   return {
     scenario_id: fixture.id,
     title: fixture.title,
     command: fixture.command ?? fixture.title,
     evidence_mode: fixture.evidence_mode,
+    fidelity_level: "evidence_grounded",
     caveat: fixture.caveat,
-    frames: fixture.events.map((envelope) => {
-      if (envelope.event.type === "process_exited") {
-        const ids = collectSemanticIds(envelope.event);
-        ids.forEach((id) => { if (id.startsWith("process:")) exitedProcesses.add(id); });
-      }
-      const ids = [...collectSemanticIds(envelope.event)];
-      const entities: readonly NativeSemanticEntity[] = ids
-        .filter((id) => !id.startsWith("fd:")) // FD entries are not top-level entities
-        .map((id) => ({
-          id,
-          kind: id.split(":")[0] || "unknown",
-          label: id,
-          lifecycle: exitedProcesses.has(id) ? { exited: { status: 0 } } : "active",
-        }));
-      return {
-        sequence: envelope.sequence,
-        stage: envelope.stage,
-        event_kind: envelope.event.type,
-        summary: eventSummaries[envelope.event.type] ?? envelope.event.type.replaceAll("_", " "),
-        entities,
-        relations: [] as const,
-        focus_candidates: ids.filter((id) => !id.startsWith("fd:")),
-        snapshot: { revision: envelope.sequence, entities, relations: [] as const },
-      };
-    }),
+    command_graph: { raw_command: fixture.command ?? fixture.title, fidelity_level: "evidence_grounded", pipelines: [{ id: "fixture", processes }], execution_edges: frames.map((frame) => ({ source: frame.action_context.source ?? "shell:main", destination: frame.action_context.destination ?? frame.action_context.actor ?? "shell:main", relation: frame.action_context.relation ?? frame.action_context.event_type })) },
+    frames,
   };
 }
 
@@ -287,21 +383,8 @@ function toVisualFrame(frame: NativeReplayFrame): VisualReplayFrame {
     eventKind: frame.event_kind,
     summary: frame.summary,
     focusNodeIds: frame.focus_candidates,
+    actionContext: frame.action_context,
   };
-}
-
-function focusedVisualEntity(frame: NativeReplayFrame): VisualEntityId {
-  const ids = frame.focus_candidates;
-  if (frame.stage === "pipe_io" || ids.some((id) => id.startsWith("pipe:"))) return "pipe";
-  if (ids.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc"))) return "filesystem";
-  if (ids.some((id) => id.includes("tty") || id.includes("terminal"))) return "terminal";
-  if (ids.some((id) => id.includes("process:grep"))) return "grep";
-  if (ids.some((id) => id.includes("process:echo"))) return "echo";
-  if (ids.some((id) => id.includes("process:ls"))) return "ls";
-  if (ids.some((id) => id.includes("process:ps"))) return "ps";
-  if (ids.some((id) => id.includes("process:cat"))) return "cat";
-  if (ids.some((id) => id.includes("process:shell"))) return "shell";
-  return "kernel";
 }
 
 /**
@@ -312,8 +395,11 @@ function deriveInfoCard(
   entity: VisualEntityId,
   frame: NativeReplayFrame | undefined,
   history: readonly NativeReplayFrame[],
+  evidenceMode: EvidenceMode = "synthetic_replay",
+  commandGraph?: NativeCommandGraph,
 ): InfoCardView {
-  const base = entityCards[entity] ?? entityCards.overview;
+  const isGenericProcess = commandGraph?.pipelines.some((pipeline) => pipeline.processes.some((process) => process.id === entity && process.opaque_internals)) ?? false;
+  const base = entityCards[entity] ?? (isGenericProcess ? entityCards.process : undefined) ?? entityCards.overview!;
   if (!frame) return base;
 
   /* Find matching entity in snapshot */
@@ -363,8 +449,12 @@ function deriveInfoCard(
     activeFds: mentionedFds.length > 0 ? mentionedFds : undefined,
     relations: activeRelations.length > 0 ? activeRelations : undefined,
     /* Honest evidence labeling */
-    evidenceSource: `Mô phỏng ngữ nghĩa (${frame.event_kind})`,
-    confidence: "Synthetic fixture — Không phải dữ liệu live",
+    evidenceSource: evidenceMode === "synthetic_replay" ? `Synthetic semantic fixture (${frame.event_kind})` : `Shell structure parser (${frame.action_context.event_type})`,
+    confidence: evidenceMode === "synthetic_replay"
+      ? "LEVEL A — fixture có provenance, không phải live trace"
+      : evidenceMode === "structurally_derived"
+        ? "LEVEL B — suy diễn cấu trúc, không phải trace kernel"
+        : "LEVEL C — opaque executable, nội bộ chưa quan sát",
   };
 }
 
@@ -385,7 +475,7 @@ function DesktopApp() {
   const [terminalInput, setTerminalInput] = useState("");
   const [terminalLines, setTerminalLines] = useState<readonly string[]>([
     "Linux Observatory — Bảng lệnh mô phỏng ngữ nghĩa sẵn sàng.",
-    "Hỗ trợ các kịch bản: cat | grep, echo >, cat, ls -l, ps",
+    "Nhập pipeline/redirection shell an toàn; lệnh không được thực thi.",
   ]);
   const [audioMuted, setAudioMuted] = useState(() => audioEngine.isMuted());
   const [audioVolume, setAudioVolume] = useState(() => audioEngine.getVolume());
@@ -432,6 +522,33 @@ function DesktopApp() {
     }
   }
 
+  async function loadCommand(command: string, startPlaying = true) {
+    setStatus("loading");
+    setError(undefined);
+    try {
+      let result: NativeReplayPresentation;
+      if (isTauri()) {
+        result = await invoke<NativeReplayPresentation>("run_command_scenario", { command });
+      } else {
+        const fixtureId = commandToScenario[command];
+        if (!fixtureId) throw new Error("Generic command planning chạy trong desktop Tauri; web preview chỉ dùng fixture kiểm thử.");
+        result = browserPresentation(fixtureId);
+      }
+      if (result.frames.length === 0) throw new Error("Planner không sinh action hợp lệ");
+      setPresentation(result);
+      setSelectedScenarioId(result.scenario_id);
+      setFrameIndex(0);
+      prevFrameIndex.current = -1;
+      setStatus("ready");
+      setPlaying(startPlaying);
+      return result;
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setError(message); setStatus("error"); setPlaying(false);
+      throw reason;
+    }
+  }
+
   useEffect(() => {
     if (loadedOnce.current) return;
     loadedOnce.current = true;
@@ -474,21 +591,14 @@ function DesktopApp() {
     if (frameIndex === prevFrameIndex.current) return; // Prevent duplicate audio
     prevFrameIndex.current = frameIndex;
 
-    const plan = resolveActionPlan(
-      current.event_kind,
-      current.stage,
-      current.focus_candidates,
-      current.sequence,
-      presentation?.frames.length ?? 1,
-    );
-
-    const ent = plan.sourceEntity !== "overview" ? plan.sourceEntity : (focusedVisualEntity(current));
+    const plan = resolveActionPlan(current.action_context);
+    const ent = plan.source.role === "process" ? plan.source.semanticId : plan.source.role;
     setSelectedEntity(ent);
-    const x = entityXPositions[plan.sourceEntity] ?? 0;
-    audioEngine.playEvent(plan.audioCue, x);
+    const x = entityXPositions[plan.source.role] ?? 0;
+    audioEngine.playEvent(plan.audioCue, x, playbackSpeed);
 
     /* Update audio ambience level based on how active the system is */
-    const activeCount = frameHistory.filter((f) => !f.eventKind.includes("exit") && !f.eventKind.includes("wait")).length;
+    const activeCount = frameHistory.filter((f) => f.actionContext.event_type !== "exit" && f.actionContext.event_type !== "wait").length;
     audioEngine.setActivityLevel(Math.min(1, activeCount / Math.max(1, presentation?.frames.length ?? 1)));
 
     if (frameIndex === (presentation?.frames.length ?? 0) - 1) {
@@ -499,20 +609,27 @@ function DesktopApp() {
 
   const allEvents: readonly EventBoardItem[] = useMemo(() => {
     if (!presentation) return [];
-    return presentation.frames.map((f, idx) => ({
-      index: idx,
-      sequence: f.sequence,
-      stage: f.stage,
-      eventKind: f.event_kind,
-      summary: f.summary,
-      status: idx < frameIndex ? "past" : idx === frameIndex ? "current" : "upcoming",
-    }));
+    return presentation.frames.map((f, idx) => {
+      const plan = resolveActionPlan(f.action_context);
+      return {
+        index: idx,
+        sequence: f.sequence,
+        stage: f.stage,
+        eventKind: f.event_kind,
+        summary: f.summary,
+        status: idx < frameIndex ? "past" : idx === frameIndex ? "current" : "upcoming",
+        sourceId: plan.source.role === "pipe" ? f.action_context.pipeline_id ?? plan.source.semanticId : plan.source.semanticId,
+        destinationId: plan.target.role === "pipe" ? f.action_context.pipeline_id ?? plan.target.semanticId : plan.target.semanticId,
+        relation: f.action_context.relation,
+      };
+    });
   }, [presentation, frameIndex]);
 
   const replay: ReplayViewModel = {
     status,
     title: presentation?.title ?? "Linux Observatory",
     caveat: presentation?.caveat ?? "Mô phỏng ngữ nghĩa độc lập.",
+    evidenceMode: presentation?.evidence_mode ?? "opaque_command",
     current: presentation?.frames[frameIndex] ? toFrameView(presentation.frames[frameIndex]) : undefined,
     frameIndex,
     frameCount: presentation?.frames.length ?? 1,
@@ -559,27 +676,18 @@ function DesktopApp() {
     const command = terminalInput.trim();
     if (!command) return;
 
-    const targetScenarioId = commandToScenario[command];
-
-    if (targetScenarioId) {
-      setTerminalLines((c) => [
-        ...c,
-        `observer@synthetic:~$ ${command}`,
-        "MÔ PHỎNG NGỮ NGHĨA — SYNTHETIC FIXTURE, KHÔNG PHẢI LIVE TRACE",
-        `Đang khởi chạy kịch bản mô phỏng cho: ${command}`,
-      ]);
-      setTerminalInput("");
-      void loadScenario(targetScenarioId, true);
-      return;
-    }
-
     setTerminalLines((c) => [
       ...c,
-      `observer@synthetic:~$ ${command}`,
-      "Lệnh chưa được hỗ trợ. Chọn kịch bản có sẵn ở trên.",
+      `observer@planner:~$ ${command}`,
+      "Đang parse cấu trúc shell — KHÔNG THỰC THI LỆNH.",
     ]);
-    audioEngine.playEvent("error", 0);
     setTerminalInput("");
+    void loadCommand(command, true).then((result) => {
+      setTerminalLines((lines) => [...lines, result.caveat]);
+    }).catch((reason) => {
+      setTerminalLines((lines) => [...lines, `TỪ CHỐI: ${reason instanceof Error ? reason.message : String(reason)}`]);
+      audioEngine.playEvent("error", 0);
+    });
   }
 
   /* Derive info card from evidence, not hardcoded data */
@@ -588,6 +696,8 @@ function DesktopApp() {
       selectedEntity,
       presentation?.frames[frameIndex],
       presentation?.frames.slice(0, frameIndex + 1) ?? [],
+      presentation?.evidence_mode,
+      presentation?.command_graph,
     ),
     [selectedEntity, presentation, frameIndex],
   );
@@ -599,7 +709,9 @@ function DesktopApp() {
         <IndustrialMegacity
           frame={visualFrame}
           frameHistory={frameHistory}
+          commandGraph={presentation?.command_graph}
           playing={playing}
+          playbackSpeed={playbackSpeed}
           cameraMode={cameraMode}
           totalFrames={presentation?.frames.length ?? 1}
           selectedEntity={selectedEntity}
@@ -614,11 +726,14 @@ function DesktopApp() {
       playbackSpeed={playbackSpeed}
       availableScenarios={scenarioOptions}
       currentScenarioId={selectedScenarioId}
+      commandGraph={presentation?.command_graph}
       telemetry={{
         backend,
         fps: telemetry?.fps,
-        frameTimeMs: telemetry?.frameTimeMs,
+        frameIntervalAvgMs: telemetry?.frameIntervalAvgMs,
+        frameIntervalP95Ms: telemetry?.frameIntervalP95Ms,
         drawCalls: telemetry?.drawCalls,
+        triangles: telemetry?.triangles,
         visibleObjects: telemetry?.visibleObjects,
       }}
       terminalOpen={terminalOpen}

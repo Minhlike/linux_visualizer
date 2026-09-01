@@ -1,8 +1,6 @@
 #![forbid(unsafe_code)]
 
-use semantic_core::{
-    PresentationScenario, ReplayEngine, ReplayScenario,
-};
+use semantic_core::{CommandPlanner, PresentationScenario, ReplayEngine, ReplayScenario};
 use serde::Serialize;
 
 #[cfg(not(test))]
@@ -36,8 +34,8 @@ pub struct ScenarioMetadata {
 
 #[cfg_attr(not(test), tauri::command)]
 fn get_available_scenarios() -> Result<Vec<ScenarioMetadata>, String> {
-    let scenarios = ReplayScenario::all_scenarios()
-        .map_err(|e| format!("failed to load scenarios: {e}"))?;
+    let scenarios =
+        ReplayScenario::all_scenarios().map_err(|e| format!("failed to load scenarios: {e}"))?;
     Ok(scenarios
         .into_iter()
         .map(|s| ScenarioMetadata {
@@ -58,18 +56,27 @@ fn get_available_scenarios() -> Result<Vec<ScenarioMetadata>, String> {
 fn load_scenario(scenario_id: String) -> Result<PresentationScenario, String> {
     let scenario = ReplayScenario::find_by_id(&scenario_id)
         .ok_or_else(|| format!("scenario not found: {scenario_id}"))?;
-    let frames = ReplayEngine::replay(&scenario)
-        .map_err(|e| format!("semantic replay rejected: {e:?}"))?;
+    let frames =
+        ReplayEngine::replay(&scenario).map_err(|e| format!("semantic replay rejected: {e:?}"))?;
     Ok(PresentationScenario::from_replay(&scenario, &frames))
 }
 
 #[cfg_attr(not(test), tauri::command)]
 fn run_command_scenario(command: String) -> Result<PresentationScenario, String> {
-    let scenario = ReplayScenario::find_by_command(&command)
-        .ok_or_else(|| format!("unrecognized command: {command}"))?;
-    let frames = ReplayEngine::replay(&scenario)
-        .map_err(|e| format!("semantic replay rejected: {e:?}"))?;
-    Ok(PresentationScenario::from_replay(&scenario, &frames))
+    if let Some(scenario) = ReplayScenario::find_by_command(&command) {
+        let frames = ReplayEngine::replay(&scenario)
+            .map_err(|e| format!("semantic replay rejected: {e:?}"))?;
+        return Ok(PresentationScenario::from_replay(&scenario, &frames));
+    }
+    let (command_graph, scenario) = CommandPlanner::plan(&command)
+        .map_err(|error| format!("unsupported shell structure: {error:?}"))?;
+    let frames =
+        ReplayEngine::replay(&scenario).map_err(|e| format!("semantic replay rejected: {e:?}"))?;
+    Ok(PresentationScenario::from_replay_with_command_graph(
+        &scenario,
+        &frames,
+        command_graph,
+    ))
 }
 
 #[cfg_attr(not(test), tauri::command)]
@@ -104,17 +111,24 @@ mod tests {
     fn native_command_exposes_only_validated_replay_frames() {
         let presentation = mock_pipe_replay().expect("embedded replay must remain valid");
 
-        assert_eq!(presentation.evidence_mode, "synthetic_replay");
+        assert_eq!(
+            presentation.evidence_mode,
+            semantic_core::EvidenceMode::SyntheticReplay
+        );
         assert_eq!(presentation.frames.len(), 22);
         assert_eq!(presentation.frames.last().unwrap().sequence, 22);
-        assert!(presentation
-            .frames
-            .iter()
-            .all(|frame| !frame.focus_candidates.is_empty()));
-        assert!(presentation.frames[1]
-            .focus_candidates
-            .iter()
-            .any(|id| id == "pipe:1"));
+        assert!(
+            presentation
+                .frames
+                .iter()
+                .all(|frame| !frame.focus_candidates.is_empty())
+        );
+        assert!(
+            presentation.frames[1]
+                .focus_candidates
+                .iter()
+                .any(|id| id == "pipe:1")
+        );
     }
 
     #[test]
@@ -130,5 +144,31 @@ mod tests {
             let by_command = run_command_scenario(s.command.clone()).expect("command must match");
             assert_eq!(by_command.scenario_id, s.id);
         }
+    }
+
+    #[test]
+    fn arbitrary_safe_shell_structure_is_planned_without_execution() {
+        let presentation = run_command_scenario("foo < in.txt | bar >> out.log".to_owned())
+            .expect("generic structure should be visualizable");
+        assert_eq!(
+            presentation.evidence_mode,
+            semantic_core::EvidenceMode::OpaqueCommand
+        );
+        assert_eq!(presentation.command_graph.pipelines[0].processes.len(), 2);
+        assert!(
+            presentation
+                .frames
+                .iter()
+                .all(|frame| frame.action_context.byte_count.is_none())
+        );
+        assert!(presentation.caveat.contains("chưa được quan sát"));
+
+        let adapted = run_command_scenario("cat input.txt | grep linux > out.txt".to_owned())
+            .expect("known adapters should use structural fidelity");
+        assert_eq!(
+            adapted.evidence_mode,
+            semantic_core::EvidenceMode::StructurallyDerived
+        );
+        assert!(adapted.caveat.contains("KHÔNG PHẢI TRACE KERNEL"));
     }
 }

@@ -17,12 +17,24 @@ export interface EventBoardItem {
   readonly eventKind: string;
   readonly summary: string;
   readonly status: "past" | "current" | "upcoming";
+  readonly sourceId: string | null;
+  readonly destinationId: string | null;
+  readonly relation: string | null;
+}
+
+export interface CommandGraphView {
+  readonly pipelines: readonly {
+    readonly id: string;
+    readonly processes: readonly { readonly id: string; readonly executable: string; readonly opaque_internals: boolean }[];
+  }[];
+  readonly execution_edges: readonly { readonly source: string; readonly destination: string; readonly relation: string }[];
 }
 
 export interface ReplayViewModel {
   readonly status: "idle" | "loading" | "ready" | "error";
   readonly title: string;
   readonly caveat: string;
+  readonly evidenceMode: "synthetic_replay" | "structurally_derived" | "opaque_command";
   readonly current: ReplayFrameView | undefined;
   readonly frameIndex: number;
   readonly frameCount: number;
@@ -47,8 +59,10 @@ export interface InfoCardView {
 export interface TelemetryView {
   readonly backend: "initializing" | "webgpu" | "webgl2";
   readonly fps: number | undefined;
-  readonly frameTimeMs: number | undefined;
+  readonly frameIntervalAvgMs: number | undefined;
+  readonly frameIntervalP95Ms: number | undefined;
   readonly drawCalls: number | undefined;
+  readonly triangles: number | undefined;
   readonly visibleObjects: number | undefined;
 }
 
@@ -67,6 +81,7 @@ export interface LearningShellProps {
   readonly playbackSpeed?: number | undefined;
   readonly availableScenarios?: readonly ScenarioChoice[] | undefined;
   readonly currentScenarioId?: string | undefined;
+  readonly commandGraph?: CommandGraphView | undefined;
   readonly telemetry: TelemetryView;
   readonly terminalOpen: boolean;
   readonly terminalInput: string;
@@ -138,63 +153,24 @@ function getPhaseTitle(stage: string): string {
 }
 
 // ─── Causal Lane Helper ──────────────────────────────────────────
-export type SemanticLaneId = "shell" | "cat" | "grep" | "echo" | "ls" | "ps" | "pipe" | "filesystem" | "terminal";
-
 interface CausalLaneDef {
-  id: SemanticLaneId;
+  id: string;
   label: string;
   color: string;
 }
 
-const entityLaneConfigs: Readonly<Record<SemanticLaneId, { label: string; color: string }>> = {
-  shell: { label: "SHELL [sh]", color: "#2563eb" },
-  cat: { label: "CAT [cat]", color: "#d97706" },
-  grep: { label: "GREP [grep]", color: "#059669" },
-  echo: { label: "ECHO [echo]", color: "#db2777" },
-  ls: { label: "LS [ls]", color: "#7c3aed" },
-  ps: { label: "PS [ps]", color: "#0891b2" },
-  pipe: { label: "PIPE [ống]", color: "#0d9488" },
-  filesystem: { label: "TẬP TIN [vfs]", color: "#4f46e5" },
-  terminal: { label: "TERMINAL [tty]", color: "#0d9488" },
-};
+function getEventInvolvedLanes(event: EventBoardItem): string[] {
+  return [...new Set([event.sourceId, event.destinationId].filter((id): id is string => Boolean(id)))];
+}
 
-function getEventInvolvedLanes(event: EventBoardItem, scenarioId?: string): SemanticLaneId[] {
-  const k = event.eventKind;
-  const s = event.stage;
-  const summary = event.summary.toLowerCase();
-
-  // Child process resolution
-  let child: SemanticLaneId = "cat";
-  if (summary.includes("grep") || scenarioId?.includes("grep")) child = "grep";
-  else if (summary.includes("echo") || scenarioId?.includes("echo")) child = "echo";
-  else if (summary.includes("ls") || scenarioId?.includes("ls")) child = "ls";
-  else if (summary.includes("ps") || scenarioId?.includes("ps")) child = "ps";
-  else if (summary.includes("cat") || scenarioId?.includes("cat")) child = "cat";
-
-  if (k === "shell_started") return ["shell"];
-  if (k === "standard_streams_initialized") return ["shell", "terminal"];
-  if (k === "pipe_created") return ["shell", "pipe"];
-  if (k === "process_forked") return ["shell", child];
-  if (k === "file_descriptor_duplicated" || k === "file_descriptor_closed" || k === "process_executed") {
-    return [child];
-  }
-  if (k === "file_opened") return ["filesystem", child];
-  if (k === "bytes_read") {
-    if (s === "pipe_io" || summary.includes("pipe")) return ["pipe", "grep"];
-    return ["filesystem", child];
-  }
-  if (k === "bytes_written") {
-    if (s === "pipe_io" || summary.includes("pipe")) return ["cat", "pipe"];
-    if (s === "terminal_io" || summary.includes("terminal") || summary.includes("stdout")) {
-      return [child, "terminal"];
-    }
-    if (child === "echo") return ["echo", "filesystem"];
-    return [child, "terminal"];
-  }
-  if (k === "process_exited") return [child];
-  if (k === "process_waited") return ["shell", child];
-
-  return ["shell"];
+function laneLabel(id: string, commandGraph: CommandGraphView | undefined): string {
+  const process = commandGraph?.pipelines.flatMap((pipeline) => pipeline.processes).find((item) => item.id === id);
+  if (process) return `${process.executable.toUpperCase()} [process]`;
+  if (id.startsWith("file:")) return `${id.slice(id.lastIndexOf(":") + 1)} [file]`;
+  if (id.startsWith("pipe:")) return "PIPE [anonymous]";
+  if (id.startsWith("terminal:")) return "TERMINAL [tty]";
+  if (id.startsWith("shell:")) return "SHELL [sh]";
+  return id;
 }
 
 export function LearningShell({
@@ -206,6 +182,7 @@ export function LearningShell({
   playbackSpeed = 0.5,
   availableScenarios = [],
   currentScenarioId,
+  commandGraph,
   telemetry,
   terminalOpen,
   terminalInput,
@@ -271,31 +248,22 @@ export function LearningShell({
     return groups;
   }, [allEvents]);
 
-  // Dynamically compute scenario-specific active lanes
+  // Build lanes from the command graph and typed action endpoints; never from names or summaries.
   const causalLanes: readonly CausalLaneDef[] = useMemo(() => {
-    const lanes: CausalLaneDef[] = [
-      { id: "shell", ...entityLaneConfigs.shell },
-    ];
-
-    if (currentScenarioId?.includes("grep")) {
-      lanes.push({ id: "cat", ...entityLaneConfigs.cat });
-      lanes.push({ id: "pipe", ...entityLaneConfigs.pipe });
-      lanes.push({ id: "grep", ...entityLaneConfigs.grep });
-    } else if (currentScenarioId?.includes("echo")) {
-      lanes.push({ id: "echo", ...entityLaneConfigs.echo });
-    } else if (currentScenarioId?.includes("ls")) {
-      lanes.push({ id: "ls", ...entityLaneConfigs.ls });
-    } else if (currentScenarioId?.includes("ps")) {
-      lanes.push({ id: "ps", ...entityLaneConfigs.ps });
-    } else {
-      lanes.push({ id: "cat", ...entityLaneConfigs.cat });
+    const ordered = new Set<string>();
+    const structuralRelations = new Set(["controls", "pipe", "file_read", "file_write", "terminal_input", "terminal_output"]);
+    for (const edge of commandGraph?.execution_edges ?? []) {
+      if (!structuralRelations.has(edge.relation)) continue;
+      if (!edge.source.startsWith("fd:")) ordered.add(edge.source);
+      if (!edge.destination.startsWith("fd:")) ordered.add(edge.destination);
     }
-
-    lanes.push({ id: "filesystem", ...entityLaneConfigs.filesystem });
-    lanes.push({ id: "terminal", ...entityLaneConfigs.terminal });
-
-    return lanes;
-  }, [currentScenarioId]);
+    for (const event of allEvents) {
+      if (event.sourceId) ordered.add(event.sourceId);
+      if (event.destinationId) ordered.add(event.destinationId);
+    }
+    const colors = ["#2563eb", "#d97706", "#059669", "#7c3aed", "#0891b2", "#db2777", "#0d9488", "#4f46e5"];
+    return [...ordered].map((id, index) => ({ id, label: laneLabel(id, commandGraph), color: colors[index % colors.length] ?? "#64748b" }));
+  }, [allEvents, commandGraph]);
 
   // Draggable terminal state
   const [terminalPos, setTerminalPos] = useState<{ x: number; y: number }>(() => {
@@ -349,7 +317,11 @@ export function LearningShell({
 
         <div className="evidence-state">
           <span className="pulse-dot" aria-hidden="true" />
-          MÔ PHỎNG NGỮ NGHĨA — SYNTHETIC FIXTURE
+          {replay.evidenceMode === "synthetic_replay"
+            ? "LEVEL A — EVIDENCE-GROUNDED FIXTURE"
+            : replay.evidenceMode === "structurally_derived"
+              ? "LEVEL B — SUY DIỄN CẤU TRÚC, KHÔNG PHẢI TRACE KERNEL"
+              : "LEVEL C — OPAQUE PROCESS, NỘI BỘ CHƯA QUAN SÁT"}
         </div>
 
         <div className="top-controls">
@@ -458,6 +430,7 @@ export function LearningShell({
               <span>SỰ KIỆN: <code>{replay.current.eventKind}</code></span>
               <span>ĐỒ THỊ: <strong>{replay.current.nodeCount} nút / {replay.current.edgeCount} cạnh</strong></span>
             </div>
+            <p className="fidelity-caveat">{replay.caveat}</p>
           </div>
         )}
 
@@ -473,7 +446,7 @@ export function LearningShell({
                   <div className="lane-timeline-track">
                     <div className="lane-guide-line" />
                     {allEvents.map((ev) => {
-                      const involvedLanes = getEventInvolvedLanes(ev, currentScenarioId);
+                      const involvedLanes = getEventInvolvedLanes(ev);
                       const isNodeInLane = involvedLanes.includes(lane.id);
                       const isCurrent = ev.status === "current";
 
@@ -678,7 +651,7 @@ export function LearningShell({
           </div>
 
           <div className="terminal-presets">
-            <span className="preset-label">Kịch bản:</span>
+            <span className="preset-label">Fixture mẫu:</span>
             {["cat file.txt | grep linux", "echo linux > sample.txt", "cat sample.txt", "ls -l", "ps"].map((cmd) => (
               <button type="button" key={cmd} className="preset-btn" onClick={() => onTerminalInputChange(cmd)}>
                 {cmd}
@@ -691,7 +664,7 @@ export function LearningShell({
           </div>
 
           <form onSubmit={onTerminalSubmit}>
-            <label htmlFor="replay-command">observer@synthetic:~$</label>
+            <label htmlFor="replay-command">observer@planner:~$</label>
             <input
               id="replay-command"
               autoFocus
@@ -710,8 +683,10 @@ export function LearningShell({
       <footer className="telemetry-strip">
         <span>BỘ KẾT XUẤT <strong>{telemetry.backend.toUpperCase()}</strong></span>
         <span>FPS <strong>{telemetry.fps?.toFixed(0) ?? "—"}</strong></span>
-        <span>THỜI GIAN KHUNG <strong>{telemetry.frameTimeMs?.toFixed(1) ?? "—"} MS</strong></span>
-        <span>LỆNH VẼ <strong>{telemetry.drawCalls ?? "—"}</strong></span>
+        <span>FRAME INTERVAL AVG <strong>{telemetry.frameIntervalAvgMs?.toFixed(1) ?? "—"} MS</strong></span>
+        <span>FRAME INTERVAL P95 <strong>{telemetry.frameIntervalP95Ms?.toFixed(1) ?? "—"} MS</strong></span>
+        <span>DRAW CALLS EST. <strong>{telemetry.drawCalls ?? "—"}</strong></span>
+        <span>TAM GIÁC <strong>{telemetry.triangles?.toLocaleString() ?? "—"}</strong></span>
         <span>ĐỐI TƯỢNG <strong>{telemetry.visibleObjects ?? "—"}</strong></span>
         <span className="orbit-help">KÉO ĐỂ XOAY · CUỘN ĐỂ PHÓNG TO</span>
       </footer>

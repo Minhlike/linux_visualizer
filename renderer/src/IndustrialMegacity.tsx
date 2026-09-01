@@ -3,9 +3,11 @@ import {
   resolveActionPlan,
   resolveCameraDirectiveFromActionPlan,
   type ActionPlan,
+  type ActionContext,
   type CameraDirective,
   type CameraFollowMode,
-  type FlowPathId,
+  type MechanicalActuation,
+  type MechanicalReaction,
   type VisualEntityId,
 } from "@linux-observatory/camera-director";
 import { useEffect, useMemo, useRef } from "react";
@@ -21,11 +23,25 @@ export interface VisualReplayFrame {
   readonly eventKind: string;
   readonly summary: string;
   readonly focusNodeIds: readonly string[];
+  readonly actionContext: ActionContext;
+}
+
+export interface VisualProcessIntent {
+  readonly id: string;
+  readonly executable: string;
+  readonly semantic_adapter: string | null;
+  readonly opaque_internals: boolean;
+}
+
+export interface VisualCommandGraph {
+  readonly pipelines: readonly { readonly id: string; readonly processes: readonly VisualProcessIntent[] }[];
+  readonly execution_edges: readonly { readonly source: string; readonly destination: string; readonly relation: string }[];
 }
 
 export interface SceneTelemetry {
   readonly fps: number;
-  readonly frameTimeMs: number;
+  readonly frameIntervalAvgMs: number;
+  readonly frameIntervalP95Ms: number;
   readonly drawCalls: number;
   readonly triangles: number;
   readonly visibleObjects: number;
@@ -34,7 +50,9 @@ export interface SceneTelemetry {
 export interface IndustrialMegacityProps {
   readonly frame: VisualReplayFrame | undefined;
   readonly frameHistory: readonly VisualReplayFrame[];
+  readonly commandGraph: VisualCommandGraph | undefined;
   readonly playing: boolean;
+  readonly playbackSpeed?: number | undefined;
   readonly cameraMode?: CameraFollowMode | undefined;
   readonly totalFrames?: number | undefined;
   readonly selectedEntity: VisualEntityId;
@@ -97,22 +115,6 @@ const psToTerminalCurve = new THREE.CatmullRomCurve3([
   new THREE.Vector3(0.6, 2.6, -1.8),
   new THREE.Vector3(3.6, 1.6, -4.5),
 ]);
-
-const flowCurves: Readonly<Record<FlowPathId, THREE.CatmullRomCurve3>> = {
-  file_to_cat: fileToCatCurve,
-  cat_to_pipe: catToPipeCurve,
-  pipe_to_grep: pipeCurve,
-  grep_to_terminal: grepToTerminalCurve,
-  cat_to_terminal: catToTerminalCurve,
-  echo_to_file: echoToFileCurve,
-  ls_to_terminal: lsToTerminalCurve,
-  ps_to_terminal: psToTerminalCurve,
-  shell_to_cat: pipeCurve,
-  shell_to_grep: pipeCurve,
-  shell_to_echo: pipeCurve,
-  shell_to_ls: pipeCurve,
-  shell_to_ps: pipeCurve,
-};
 
 // ─── Precomputed Static Geometries ─────────────────────────────────
 const fileToCatTubeGeom = new THREE.TubeGeometry(fileToCatCurve, 32, 0.07, 8, false);
@@ -364,6 +366,134 @@ function SpawnEnergyPulse({
       <meshBasicMaterial color="#38bdf8" />
     </mesh>
   );
+}
+
+const genericProcessPositions = [
+  [-2.2, 0, 1.2],
+  [0.5, 0, 1.2],
+  [3.2, 0, 1.2],
+] as const;
+
+function processPosition(commandGraph: VisualCommandGraph | undefined, semanticId: string): readonly [number, number, number] {
+  const processes = commandGraph?.pipelines.flatMap((pipeline) => pipeline.processes) ?? [];
+  const index = processes.findIndex((process) => process.id === semanticId);
+  return genericProcessPositions[Math.max(0, index) % genericProcessPositions.length] ?? genericProcessPositions[0];
+}
+
+function endpointPosition(plan: ActionPlan, which: "source" | "target", commandGraph: VisualCommandGraph | undefined): readonly [number, number, number] {
+  const endpoint = plan[which];
+  if (endpoint.role === "shell") return [-6.5, 1.1, -1];
+  if (endpoint.role === "filesystem") return [-3.6, 1.4, -4.5];
+  if (endpoint.role === "terminal") return [3.6, 1.4, -4.5];
+  if (endpoint.role === "pipe") return [0.5, 1.8, 1.2];
+  if (endpoint.role === "grep") return [3.2, 1.5, 1.2];
+  if (["cat", "echo", "ls", "ps", "process"].includes(endpoint.role)) {
+    const position = processPosition(commandGraph, endpoint.semanticId);
+    return [position[0], 1.5, position[2]];
+  }
+  return [0, 1.2, 0];
+}
+
+function GenericProcessWorkcell({
+  process,
+  position,
+  active,
+  exited,
+  selected,
+  progressRef,
+  onSelect,
+}: {
+  readonly process: VisualProcessIntent;
+  readonly position: readonly [number, number, number];
+  readonly active: boolean;
+  readonly exited: boolean;
+  readonly selected: boolean;
+  readonly progressRef: React.MutableRefObject<number>;
+  readonly onSelect: () => void;
+}) {
+  const chassis = useRef<THREE.Group>(null);
+  useFrame(() => {
+    if (!chassis.current) return;
+    const p = progressRef.current;
+    chassis.current.rotation.y = active && !exited ? Math.sin(p * Math.PI) * 0.12 : 0;
+    const scale = exited ? 0.88 : active ? 1 + Math.sin(p * Math.PI) * 0.06 : 1;
+    chassis.current.scale.setScalar(scale);
+  });
+  return (
+    <group position={position} onClick={(event) => { event.stopPropagation(); onSelect(); }}>
+      <group ref={chassis}>
+        <mesh position={[0, 0.75, 0]} castShadow>
+          <boxGeometry args={[1.65, 1.5, 1.45]} />
+          <meshStandardMaterial color={exited ? "#cbd5e1" : "#f8fafc"} metalness={0.62} roughness={0.26} />
+        </mesh>
+        <mesh position={[0, 0.82, 0.735]}>
+          <boxGeometry args={[1.25, 0.55, 0.035]} />
+          <meshStandardMaterial color="#334155" emissive={active ? "#0891b2" : "#000000"} emissiveIntensity={active ? 0.7 : 0} />
+        </mesh>
+        <mesh position={[0, 1.7, 0]}>
+          <cylinderGeometry args={[0.36, 0.58, 0.45, 6]} />
+          <meshStandardMaterial color="#64748b" metalness={0.85} roughness={0.18} />
+        </mesh>
+        <mesh position={[0, 2.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.28, 0.42, 16]} />
+          <meshBasicMaterial color={process.opaque_internals ? "#f59e0b" : "#0891b2"} />
+        </mesh>
+      </group>
+      {selected && <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[1.1, 1.25, 32]} /><meshBasicMaterial color="#0ea5e9" /></mesh>}
+    </group>
+  );
+}
+
+function MechanicalResponseExecutor({
+  plan,
+  progressRef,
+  commandGraph,
+}: {
+  readonly plan: ActionPlan;
+  readonly progressRef: React.MutableRefObject<number>;
+  readonly commandGraph: VisualCommandGraph | undefined;
+}) {
+  const sourceRef = useRef<THREE.Group>(null);
+  const targetRef = useRef<THREE.Group>(null);
+  const sourcePosition = endpointPosition(plan, "source", commandGraph);
+  const targetPosition = endpointPosition(plan, "target", commandGraph);
+
+  useFrame(() => {
+    const p = progressRef.current;
+    const pulse = Math.sin(Math.min(1, p) * Math.PI);
+    if (sourceRef.current) {
+      sourceRef.current.rotation.y = actuationRotation(plan.mechanicalResponse.actuation, p);
+      sourceRef.current.scale.setScalar(0.75 + pulse * 0.45);
+    }
+    if (targetRef.current) {
+      targetRef.current.position.y = targetPosition[1] + reactionOffset(plan.mechanicalResponse.reaction, p);
+      targetRef.current.scale.setScalar(0.65 + pulse * 0.55);
+    }
+  });
+  if (plan.mechanicalResponse.actuation === "none" && plan.mechanicalResponse.reaction === "none") return null;
+  return (
+    <group name={`mechanical-response-${plan.primitive}`}>
+      <group ref={sourceRef} position={sourcePosition}>
+        <mesh rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[0.42, 0.055, 8, 24]} /><meshBasicMaterial color="#0284c7" transparent opacity={0.8} /></mesh>
+      </group>
+      <group ref={targetRef} position={targetPosition}>
+        <mesh><octahedronGeometry args={[0.22, 0]} /><meshBasicMaterial color="#f59e0b" transparent opacity={0.9} /></mesh>
+      </group>
+    </group>
+  );
+}
+
+function actuationRotation(action: MechanicalActuation, progress: number): number {
+  const wave = Math.sin(progress * Math.PI);
+  if (action === "scanner_sweep") return progress * Math.PI * 2;
+  if (action === "lever_dispatch" || action === "port_rotate" || action === "valve_open") return wave * Math.PI * 0.7;
+  return wave * 0.25;
+}
+
+function reactionOffset(reaction: MechanicalReaction, progress: number): number {
+  if (reaction === "screen_ripple" || reaction === "filter_pass") return Math.sin(progress * Math.PI * 4) * 0.16;
+  if (reaction === "power_down") return -Math.min(1, progress) * 0.18;
+  return Math.sin(progress * Math.PI) * 0.2;
 }
 
 // ─── Unified Structural Plant (Backbone & Rails) ───────────────────
@@ -935,7 +1065,7 @@ function CameraDirectorRig({
   useFrame((_, delta) => {
     if (controlsRef.current) {
       if (cameraMode !== "free" && !isUserOrbiting.current && progress.current < 1.0) {
-        progress.current = Math.min(1.0, progress.current + delta / 1.0);
+        progress.current = Math.min(1.0, progress.current + delta / Math.max(0.05, directive.durationSec));
         const t = progress.current;
         const smooth = t * t * (3 - 2 * t);
         camera.position.lerpVectors(fromPos.current, goalPos.current, smooth);
@@ -950,28 +1080,53 @@ function CameraDirectorRig({
 
 // ─── Telemetry Probe ───────────────────────────────────────────────
 function TelemetryProbe({ onTelemetry }: { readonly onTelemetry: (v: SceneTelemetry) => void }) {
-  const { gl, scene } = useThree();
+  const { scene } = useThree();
   const elapsed = useRef(0);
   const frames = useRef(0);
+  const intervals = useRef<number[]>([]);
 
   useFrame((_, delta) => {
+    // Browser/tab suspension is not a display frame and must not poison the interval metric.
+    if (delta > 0.25) {
+      elapsed.current = 0;
+      frames.current = 0;
+      intervals.current = [];
+      return;
+    }
     elapsed.current += delta;
     frames.current += 1;
+    intervals.current.push(delta * 1000);
     if (elapsed.current < 1.0) return;
 
     let vis = 0;
-    scene.traverse((o) => { if (o.visible) vis += 1; });
-    const info = (gl as THREE.WebGLRenderer).info?.render;
+    let drawables = 0;
+    let triangles = 0;
+    scene.traverseVisible((object) => {
+      vis += 1;
+      const mesh = object as THREE.Mesh | THREE.InstancedMesh;
+      if (!(mesh as THREE.Mesh).isMesh || !mesh.geometry) return;
+      drawables += Array.isArray(mesh.material) ? Math.max(1, mesh.geometry.groups.length) : 1;
+      const baseTriangles = mesh.geometry.index
+        ? mesh.geometry.index.count / 3
+        : (mesh.geometry.getAttribute("position")?.count ?? 0) / 3;
+      const instances = (mesh as THREE.InstancedMesh).isInstancedMesh ? (mesh as THREE.InstancedMesh).count : 1;
+      triangles += baseTriangles * instances;
+    });
 
+    const ordered = intervals.current.toSorted((a, b) => a - b);
+    const average = ordered.reduce((sum, value) => sum + value, 0) / Math.max(1, ordered.length);
+    const p95 = ordered[Math.min(ordered.length - 1, Math.floor(ordered.length * 0.95))] ?? 0;
     onTelemetry({
       fps: Math.round(frames.current / elapsed.current),
-      frameTimeMs: (elapsed.current * 1000) / frames.current,
-      drawCalls: info?.calls ?? 0,
-      triangles: info?.triangles ?? 0,
+      frameIntervalAvgMs: average,
+      frameIntervalP95Ms: p95,
+      drawCalls: drawables,
+      triangles: Math.round(triangles),
       visibleObjects: vis,
     });
     elapsed.current = 0;
     frames.current = 0;
+    intervals.current = [];
   });
 
   return null;
@@ -981,62 +1136,87 @@ function TelemetryProbe({ onTelemetry }: { readonly onTelemetry: (v: SceneTeleme
 function Scene({
   frame,
   frameHistory,
+  commandGraph,
   playing,
+  playbackSpeed = 1,
   cameraMode = "gentle",
   totalFrames = 1,
   selectedEntity,
   onSelectEntity,
   onTelemetry,
 }: Omit<IndustrialMegacityProps, "onBackendChange">) {
-  const eventKind = frame?.eventKind ?? "";
-  const stage = frame?.stage ?? "";
-  const focusIds = frame?.focusNodeIds ?? [];
   const sequence = frame?.sequence ?? 0;
 
-  // Resolve Canonical ActionPlan from Semantic Event
+  // Resolve the canonical plan from typed semantic-core output only.
   const actionPlan = useMemo(
-    () => resolveActionPlan(eventKind, stage, focusIds, sequence, totalFrames),
-    [eventKind, stage, focusIds, sequence, totalFrames],
+    () => resolveActionPlan(frame?.actionContext ?? {
+      event_type: "unknown_internal", actor: null, parent: null, child: null,
+      executable: null, descriptor: null, descriptor_target: null,
+      target_node_kind: null, source: null, destination: null, relation: null,
+      byte_count: null, file_access: null, pipeline_id: null,
+      evidence_mode: "opaque_command", confidence: "unknown",
+    }),
+    [frame?.actionContext],
   );
 
   const directive = useMemo(
-    () => resolveCameraDirectiveFromActionPlan(actionPlan, sequence, totalFrames, cameraMode),
-    [actionPlan, sequence, totalFrames, cameraMode],
+    () => resolveCameraDirectiveFromActionPlan(actionPlan, sequence, totalFrames, cameraMode, playbackSpeed),
+    [actionPlan, sequence, totalFrames, cameraMode, playbackSpeed],
   );
 
   // Execute One-Shot Choreography with zero React setState in loop
-  const { progressRef } = useOneShotChoreography(actionPlan, sequence);
+  const scaledActionPlan = useMemo<ActionPlan>(() => ({
+    ...actionPlan,
+    mechanicalResponse: { ...actionPlan.mechanicalResponse, durationSec: actionPlan.mechanicalResponse.durationSec / playbackSpeed },
+  }), [actionPlan, playbackSpeed]);
+  const { progressRef } = useOneShotChoreography(scaledActionPlan, sequence);
 
-  // Determine presence of specific processes from history
-  const hasCat = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("cat")));
-  const hasGrep = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("grep")));
-  const hasEcho = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("echo")));
-  const hasLs = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("ls")));
-  const hasPs = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("ps")));
-  const pipeCreated = frameHistory.some((e) => e.eventKind === "pipe_created");
+  const processes = commandGraph?.pipelines.flatMap((pipeline) => pipeline.processes) ?? [];
+  const hasCat = processes.some((process) => process.semantic_adapter === "cat");
+  const hasGrep = processes.some((process) => process.semantic_adapter === "grep");
+  const hasEcho = processes.some((process) => process.semantic_adapter === "echo");
+  const hasLs = processes.some((process) => process.semantic_adapter === "ls");
+  const hasPs = processes.some((process) => process.semantic_adapter === "ps");
+  const genericProcesses = processes.filter((process) => process.semantic_adapter === null);
+  const pipeCreated = frameHistory.some((item) => item.actionContext.event_type === "pipe_create");
 
   // Determine active entities from ActionPlan
-  const isShellActive = actionPlan.sourceEntity === "shell" || actionPlan.targetEntity === "shell";
-  const isCatActive = actionPlan.sourceEntity === "cat" || actionPlan.targetEntity === "cat";
-  const isGrepActive = actionPlan.sourceEntity === "grep" || actionPlan.targetEntity === "grep";
-  const isEchoActive = actionPlan.sourceEntity === "echo" || actionPlan.targetEntity === "echo";
-  const isLsActive = actionPlan.sourceEntity === "ls" || actionPlan.targetEntity === "ls";
-  const isPsActive = actionPlan.sourceEntity === "ps" || actionPlan.targetEntity === "ps";
-  const isFsActive = actionPlan.sourceEntity === "filesystem" || actionPlan.targetEntity === "filesystem";
-  const isTermActive = actionPlan.sourceEntity === "terminal" || actionPlan.targetEntity === "terminal";
-  const isPipeActive = actionPlan.sourceEntity === "pipe" || actionPlan.targetEntity === "pipe";
+  const activeRoles = [actionPlan.source.role, actionPlan.target.role];
+  const isShellActive = activeRoles.includes("shell");
+  const isCatActive = activeRoles.includes("cat");
+  const isGrepActive = activeRoles.includes("grep");
+  const isEchoActive = activeRoles.includes("echo");
+  const isLsActive = activeRoles.includes("ls");
+  const isPsActive = activeRoles.includes("ps");
+  const isFsActive = activeRoles.includes("filesystem");
+  const isTermActive = activeRoles.includes("terminal");
+  const isPipeActive = activeRoles.includes("pipe");
 
-  const isCatExited = frameHistory.some((e) => e.eventKind === "process_exited" && e.focusNodeIds.includes("process:cat"));
-  const isGrepExited = frameHistory.some((e) => e.eventKind === "process_exited" && e.focusNodeIds.includes("process:grep"));
-  const isEchoExited = frameHistory.some((e) => e.eventKind === "process_exited" && e.focusNodeIds.includes("process:echo"));
-  const isLsExited = frameHistory.some((e) => e.eventKind === "process_exited" && e.focusNodeIds.includes("process:ls"));
-  const isPsExited = frameHistory.some((e) => e.eventKind === "process_exited" && e.focusNodeIds.includes("process:ps"));
+  const exitedExecutable = (name: string) => frameHistory.some((item) => item.actionContext.event_type === "exit" && item.actionContext.executable?.replaceAll("\\", "/").split("/").pop() === name);
+  const isCatExited = exitedExecutable("cat");
+  const isGrepExited = exitedExecutable("grep");
+  const isEchoExited = exitedExecutable("echo");
+  const isLsExited = exitedExecutable("ls");
+  const isPsExited = exitedExecutable("ps");
 
   const childTargetPos = useMemo<readonly [number, number, number] | null>(() => {
-    if (actionPlan.actionType !== "process_fork") return null;
-    if (actionPlan.targetEntity === "grep") return [3.2, 0, 1.2];
-    return [-2.2, 0, 1.2];
-  }, [actionPlan.actionType, actionPlan.targetEntity]);
+    if (actionPlan.primitive !== "SPAWN") return null;
+    const position = endpointPosition(actionPlan, "target", commandGraph);
+    return [position[0], 0, position[2]];
+  }, [actionPlan, commandGraph]);
+
+  const genericFlowCurve = useMemo(() => {
+    if (!actionPlan.flowPath) return null;
+    const start = endpointPosition(actionPlan, "source", commandGraph);
+    const end = endpointPosition(actionPlan, "target", commandGraph);
+    return new THREE.CatmullRomCurve3([
+      new THREE.Vector3(...start),
+      new THREE.Vector3((start[0] + end[0]) / 2, Math.max(start[1], end[1]) + 0.8, (start[2] + end[2]) / 2),
+      new THREE.Vector3(...end),
+    ]);
+  }, [actionPlan, commandGraph]);
+  const genericFlowTube = useMemo(() => genericFlowCurve ? new THREE.TubeGeometry(genericFlowCurve, 24, 0.045, 8, false) : null, [genericFlowCurve]);
+  useEffect(() => () => genericFlowTube?.dispose(), [genericFlowTube]);
 
   return (
     <>
@@ -1109,6 +1289,19 @@ function Scene({
         />
       )}
 
+      {genericProcesses.map((process, index) => (
+        <GenericProcessWorkcell
+          key={process.id}
+          process={process}
+          position={genericProcessPositions[index % genericProcessPositions.length] ?? genericProcessPositions[0]}
+          active={actionPlan.source.semanticId === process.id || actionPlan.target.semanticId === process.id}
+          exited={frameHistory.some((item) => item.actionContext.event_type === "exit" && item.actionContext.actor === process.id)}
+          progressRef={progressRef}
+          selected={selectedEntity === process.id}
+          onSelect={() => onSelectEntity(process.id)}
+        />
+      ))}
+
       <FilesystemAssembly
         active={isFsActive}
         selected={selectedEntity === "filesystem"}
@@ -1129,7 +1322,7 @@ function Scene({
       />
 
       {/* Spawn Energy Pulse on Fork */}
-      {actionPlan.actionType === "process_fork" && childTargetPos && (
+      {actionPlan.primitive === "SPAWN" && childTargetPos && (
         <SpawnEnergyPulse
           active={true}
           progressRef={progressRef}
@@ -1137,112 +1330,15 @@ function Scene({
         />
       )}
 
-      {/* Data Conduits & Flow Packet Streams */}
-      {/* 1. File -> CAT */}
-      {hasCat && (
+      {/* A single action-derived conduit handles every known or opaque executable. */}
+      {genericFlowCurve && genericFlowTube && (
         <group>
-          <mesh geometry={fileToCatTubeGeom} material={materials.conduitGlass} />
-          <OneShotPacketStream
-            curve={fileToCatCurve}
-            active={actionPlan.flowPath === "file_to_cat"}
-            progressRef={progressRef}
-            color={palette.catAmber}
-            count={8}
-          />
+          <mesh geometry={genericFlowTube} material={materials.conduitGlass} />
+          <OneShotPacketStream curve={genericFlowCurve} active progressRef={progressRef} color={palette.packetGlow} count={10} />
         </group>
       )}
 
-      {/* 2. CAT -> Pipe */}
-      {hasCat && pipeCreated && (
-        <OneShotPacketStream
-          curve={catToPipeCurve}
-          active={actionPlan.flowPath === "cat_to_pipe"}
-          progressRef={progressRef}
-          color={palette.catAmber}
-          count={8}
-        />
-      )}
-
-      {/* 3. Pipe -> GREP */}
-      {hasGrep && pipeCreated && (
-        <OneShotPacketStream
-          curve={pipeCurve}
-          active={actionPlan.flowPath === "pipe_to_grep" || actionPlan.flowPath === "cat_to_pipe"}
-          progressRef={progressRef}
-          color={palette.terminalTeal}
-          count={10}
-        />
-      )}
-
-      {/* 4. GREP -> Terminal */}
-      {hasGrep && (
-        <group>
-          <mesh geometry={grepToTermTubeGeom} material={materials.conduitGlass} />
-          <OneShotPacketStream
-            curve={grepToTerminalCurve}
-            active={actionPlan.flowPath === "grep_to_terminal"}
-            progressRef={progressRef}
-            color={palette.grepEmerald}
-            count={8}
-          />
-        </group>
-      )}
-
-      {/* 5. CAT -> Terminal (Scenario C: cat sample.txt — NEVER TOUCH GREP/PIPE!) */}
-      {hasCat && !hasGrep && (
-        <group>
-          <mesh geometry={catToTermTubeGeom} material={materials.conduitGlass} />
-          <OneShotPacketStream
-            curve={catToTerminalCurve}
-            active={actionPlan.flowPath === "cat_to_terminal"}
-            progressRef={progressRef}
-            color={palette.catAmber}
-            count={8}
-          />
-        </group>
-      )}
-
-      {/* 6. ECHO -> File (Scenario B: echo linux > sample.txt) */}
-      {hasEcho && (
-        <group>
-          <mesh geometry={echoToFileTubeGeom} material={materials.conduitGlass} />
-          <OneShotPacketStream
-            curve={echoToFileCurve}
-            active={actionPlan.flowPath === "echo_to_file"}
-            progressRef={progressRef}
-            color={palette.echoPink}
-            count={8}
-          />
-        </group>
-      )}
-
-      {/* 7. LS -> Terminal (Scenario D: ls -l) */}
-      {hasLs && (
-        <group>
-          <mesh geometry={lsToTermTubeGeom} material={materials.conduitGlass} />
-          <OneShotPacketStream
-            curve={lsToTerminalCurve}
-            active={actionPlan.flowPath === "ls_to_terminal"}
-            progressRef={progressRef}
-            color={palette.lsPurple}
-            count={8}
-          />
-        </group>
-      )}
-
-      {/* 8. PS -> Terminal (Scenario E: ps) */}
-      {hasPs && (
-        <group>
-          <mesh geometry={psToTermTubeGeom} material={materials.conduitGlass} />
-          <OneShotPacketStream
-            curve={psToTerminalCurve}
-            active={actionPlan.flowPath === "ps_to_terminal"}
-            progressRef={progressRef}
-            color={palette.psCyan}
-            count={8}
-          />
-        </group>
-      )}
+      <MechanicalResponseExecutor plan={scaledActionPlan} progressRef={progressRef} commandGraph={commandGraph} />
 
       <CameraDirectorRig directive={directive} cameraMode={cameraMode} />
       <TelemetryProbe onTelemetry={onTelemetry} />

@@ -6,9 +6,11 @@ use std::collections::HashSet;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod command;
 mod presentation;
 mod replay;
 
+pub use command::*;
 pub use presentation::*;
 pub use replay::*;
 

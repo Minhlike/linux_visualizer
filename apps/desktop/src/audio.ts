@@ -55,6 +55,7 @@ class SemanticAudioEngine {
   private lastIoTime = 0;
   private lastEventKind = "";
   private activityLevel = 0; // 0-1
+  private playbackSpeed = 1;
 
   constructor() {
     this.settings = loadSettings();
@@ -166,7 +167,8 @@ class SemanticAudioEngine {
   private voiceStart(): void { this.activeVoices++; }
   private voiceEnd(): void { this.activeVoices = Math.max(0, this.activeVoices - 1); }
 
-  playEvent(eventKind: string, entityX: number): void {
+  playEvent(eventKind: string, entityX: number, playbackSpeed = 1): void {
+    this.playbackSpeed = Math.max(0.25, Math.min(2, playbackSpeed));
     if (!this.canPlay(eventKind)) return;
     const fn = eventHandlers[eventKind] ?? eventHandlers["unknown"];
     if (fn) fn(this, entityX);
@@ -184,6 +186,7 @@ class SemanticAudioEngine {
     decayTarget = 0,
   ): void {
     if (!this.ctx || !this.master) return;
+    duration /= this.playbackSpeed;
     this.voiceStart();
 
     const now = this.ctx.currentTime;
@@ -223,6 +226,7 @@ class SemanticAudioEngine {
     gain = 0.1,
   ): void {
     if (!this.ctx || !this.master) return;
+    duration /= this.playbackSpeed;
     this.voiceStart();
 
     const now = this.ctx.currentTime;
@@ -258,6 +262,7 @@ class SemanticAudioEngine {
   /** Internal: chord (multiple oscillators) */
   _chord(freqs: number[], duration: number, entityX: number, gain = 0.06): void {
     if (!this.ctx || !this.master) return;
+    duration /= this.playbackSpeed;
     this.voiceStart();
 
     const now = this.ctx.currentTime;
@@ -295,6 +300,21 @@ class SemanticAudioEngine {
 
 /* ── Event Sound Handlers ─────────────────────────────────────────── */
 const eventHandlers: Readonly<Record<string, (e: SemanticAudioEngine, x: number) => void>> = {
+  SHELL_START(e, x) { e._voice("triangle", 140, 70, 0.15, x, 0.08); },
+  STREAM_INIT(e, x) { e._voice("sine", 330, 280, 0.08, x, 0.04); },
+  PIPE_CREATE(e, x) { e._voice("sine", 1200, 900, 0.06, x, 0.07); e._voice("sine", 1800, 1400, 0.06, x, 0.05); },
+  SPAWN(e, x) { e._voice("sine", 260, 540, 0.12, x, 0.1); },
+  FD_DUP(e, x) { e._voice("triangle", 880, 660, 0.04, x, 0.06); },
+  REDIRECT(e, x) { e._voice("triangle", 880, 660, 0.04, x, 0.06); },
+  FD_CLOSE(e, x) { e._voice("triangle", 520, 220, 0.06, x, 0.05); },
+  EXEC(e, x) { e._filteredVoice("sawtooth", 110, 180, 320, 0.2, x, 0.08); },
+  OPEN(e, x) { e._voice("triangle", 420, 280, 0.08, x, 0.07); },
+  READ(e, x) { e._voice("sine", 320, 260, 0.04, x, 0.04, 2); },
+  WRITE(e, x) { e._voice("square", 620, 480, 0.035, x, 0.035, 2); },
+  TERMINAL_IO(e, x) { e._voice("square", 620, 480, 0.035, x, 0.035, 2); },
+  EXIT(e, x) { e._voice("sine", 480, 65, 0.35, x, 0.09, 8, 0); },
+  WAIT(e, x) { e._voice("sine", 587.33, 440, 0.18, x, 0.06); },
+  UNKNOWN_INTERNAL(e, x) { e._voice("sine", 220, 180, 0.05, x, 0.03); },
   shell_started(e, x) { e._voice("triangle", 140, 70, 0.15, x, 0.08); },
 
   standard_streams_initialized(e, x) { e._voice("sine", 330, 280, 0.08, x, 0.04); },
