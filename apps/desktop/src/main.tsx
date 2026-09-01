@@ -107,17 +107,18 @@ const commandToScenario: Readonly<Record<string, string>> = {
   "ps": "ps-inspection-v1",
 };
 
+/* Entity X positions in the unified plant layout (for stereo panning) */
 const entityXPositions: Readonly<Record<string, number>> = {
-  shell: -6.5,
-  cat: -2.2,
-  echo: -2.2,
-  ls: -2.2,
-  ps: -2.2,
-  filesystem: -3.6,
-  kernel: 0.5,
-  pipe: 0.8,
-  grep: 3.2,
-  terminal: 3.6,
+  shell: -4,
+  cat: -1.5,
+  echo: -1.5,
+  ls: -1.5,
+  ps: -1.5,
+  filesystem: -2,
+  kernel: 0,
+  pipe: 0.5,
+  grep: 2.5,
+  terminal: 3,
 };
 
 const eventSummaries: Readonly<Record<string, string>> = {
@@ -136,90 +137,91 @@ const eventSummaries: Readonly<Record<string, string>> = {
   process_waited: "Shell quan sát và thu nhận trạng thái kết thúc qua wait",
 };
 
+/* ── Entity info cards — honest about synthetic evidence ─────────── */
 const entityCards: Readonly<Record<VisualEntityId, InfoCardView>> = {
   overview: {
-    name: "Linux Observatory",
-    type: "HỆ THỐNG QUAN SÁT",
-    visualMetaphor: "Tổ hợp các module cơ khí chuyên biệt được liên kết bởi trục truyền động và conduit.",
-    technicalReality: "Phép chiếu trực quan từ đồ thị ngữ nghĩa đã được xác thực qua chuỗi bằng chứng.",
-    limitations: "Khoảng cách và kích thước cơ khí không đại diện cho địa chỉ bộ nhớ, độ trễ hoặc quyền hạn hạt nhân.",
+    name: "Linux Observatory Plant",
+    type: "HỆ MÁY QUAN SÁT HỢP KHỐI",
+    visualMetaphor: "Hệ máy cơ khí hợp khối với lõi hạt nhân trung tâm, các bay tiến trình, conduit dữ liệu và console I/O.",
+    technicalReality: "Phép chiếu trực quan từ đồ thị ngữ nghĩa. Khoảng cách và cơ chế mang tính ẩn dụ.",
+    limitations: "Khoảng cách không đại diện cho địa chỉ bộ nhớ. Cơ chế là phép ẩn dụ, không phải mô phỏng phần cứng.",
   },
   shell: {
-    name: "Trung tâm Điều phối Shell",
-    type: "TIẾN TRÌNH / ORCHESTRATOR",
-    visualMetaphor: "Bàn điều khiển trung tâm với các thanh routing khởi tạo và giám sát tiến trình.",
-    technicalReality: "Shell tạo đường ống, phân nhánh tiến trình con qua fork, chuyển hướng FD và quan sát kết thúc qua wait.",
-    limitations: "Không hiển thị chi tiết giải mã cú pháp AST, cấu trúc job control hoặc lập lịch nội bộ.",
+    name: "Shell Dispatch Bay",
+    type: "TIẾN TRÌNH ĐIỀU PHỐI",
+    visualMetaphor: "Bàn điều khiển relay với các thanh routing dispatch tới process bay.",
+    technicalReality: "Shell tạo pipe, fork tiến trình con, dup2 chuyển hướng FD, wait thu nhận kết thúc.",
+    limitations: "Không hiển thị AST parsing, job control hay lập lịch nội bộ.",
   },
   cat: {
-    name: "Tiến trình CAT",
+    name: "CAT Intake Module",
     type: "TIẾN TRÌNH USER-SPACE",
-    visualMetaphor: "Bộ nạp liệu dạng phễu hút dữ liệu từ kho lưu trữ và bơm vào đường ống truyền dẫn.",
-    technicalReality: "Tiến trình con gọi exec /bin/cat, đọc nội dung tập tin qua FD đọc và xuất dữ liệu ra stdout.",
-    limitations: "Khung máy không phải sơ đồ không gian địa chỉ ảo và kích thước không phản ánh mức chiếm dụng RAM.",
+    visualMetaphor: "Buồng nạp liệu với hatch và intake roller hút dữ liệu từ storage vault.",
+    technicalReality: "exec /bin/cat → open(file) → read(fd) → write(stdout). Dữ liệu đi qua kernel buffer.",
+    limitations: "Không mô phỏng page cache, read-ahead, hay buffer size thực tế.",
   },
   grep: {
-    name: "Tiến trình GREP",
+    name: "GREP Filter Chamber",
     type: "TIẾN TRÌNH USER-SPACE",
-    visualMetaphor: "Buồng lọc hình hộp với các thanh lọc dọc tách dòng dữ liệu khớp mẫu.",
-    technicalReality: "Tiến trình con gọi exec /bin/grep, đọc luồng byte từ stdin kết nối với đường ống.",
-    limitations: "Thuật toán so khớp chuỗi regex, bộ đệm buffer nội bộ được giản lược thành luồng dữ liệu ngữ nghĩa.",
+    visualMetaphor: "Buồng lọc với các thanh lọc dọc. Dữ liệu khớp mẫu đi qua, phần còn lại bị triệt.",
+    technicalReality: "exec /bin/grep → read(stdin/pipe) → regex match → write(stdout).",
+    limitations: "Thuật toán regex, buffer nội bộ và line-buffering mode được giản lược.",
   },
   echo: {
-    name: "Tiến trình ECHO",
+    name: "ECHO Emitter Module",
     type: "TIẾN TRÌNH USER-SPACE",
-    visualMetaphor: "Bộ phát hình loa phát dòng ký tự trực tiếp ra đích được chuyển hướng.",
-    technicalReality: "Tiến trình thực thi echo, ghi trực tiếp chuỗi byte vào descriptor số 1 đã chuyển hướng sang tập tin.",
-    limitations: "Sự khác biệt giữa built-in shell và /bin/echo độc lập được biểu diễn nhất quán theo ngữ nghĩa ghi.",
+    visualMetaphor: "Bộ phát horn đẩy byte burst trực tiếp ra đích chuyển hướng.",
+    technicalReality: "echo → write(fd1 đã dup2 sang file). Chuỗi byte ghi trực tiếp.",
+    limitations: "Sự khác biệt built-in/external echo được giản lược.",
   },
   ls: {
-    name: "Tiến trình LS",
+    name: "LS Scanner Turret",
     type: "TIẾN TRÌNH USER-SPACE",
-    visualMetaphor: "Tháp quét xoay với đĩa cảm biến đọc thông tin danh mục từ kho lưu trữ thư mục.",
-    technicalReality: "Tiến trình con gọi syscall getdents/read để quét cấu trúc thư mục và định dạng danh sách ra thiết bị xuất.",
-    limitations: "Cấu trúc dentry cache và phân trang bảng inode được nén thành chuỗi byte danh mục.",
+    visualMetaphor: "Tháp quét xoay với đĩa cảm biến đọc danh mục thư mục.",
+    technicalReality: "exec /bin/ls → getdents(dir_fd) → stat() → format → write(stdout).",
+    limitations: "Cấu trúc dentry cache và inode table được giản lược.",
   },
   ps: {
-    name: "Tiến trình PS",
+    name: "PS Diagnostic Probe",
     type: "TIẾN TRÌNH USER-SPACE",
-    visualMetaphor: "Đầu dò chẩn đoán với nhiều vòng cảm biến nội soi trạng thái hoạt động của hệ sinh thái tiến trình.",
-    technicalReality: "Tiến trình con phân tích không gian /proc ảo do hạt nhân cung cấp để trích xuất bảng trạng thái PID.",
-    limitations: "Các trường thống kê mở rộng của task_struct trong hạt nhân được thu gọn cho mục đích quan sát sư phạm.",
+    visualMetaphor: "Đầu dò chẩn đoán với vòng cảm biến quét /proc.",
+    technicalReality: "exec /bin/ps → read(/proc/[pid]/*) → format → write(stdout).",
+    limitations: "Các trường task_struct mở rộng được thu gọn.",
   },
   filesystem: {
-    name: "Hệ thống Tập tin (Filesystem)",
+    name: "Storage Assembly",
     type: "TÀI NGUYÊN KERNEL / VFS",
-    visualMetaphor: "Kho lưu trữ hình lục giác tĩnh cung cấp dữ liệu ban đầu.",
-    technicalReality: "Tập tin được mở thông qua VFS và cấp phát một mục trong bảng mô tả tệp mở (OpenFileDescription).",
-    limitations: "Không ràng buộc loại filesystem cụ thể (ext4, btrfs), page cache, hay thiết bị khối vật lý.",
+    visualMetaphor: "Kho lưu trữ lục giác tĩnh với hatch mở khi file được truy cập.",
+    technicalReality: "VFS abstraction layer. open() tạo file description entry + cấp phát FD.",
+    limitations: "Không ràng buộc filesystem cụ thể, page cache, hay thiết bị khối.",
   },
   terminal: {
-    name: "Thiết bị Đầu cuối (Terminal)",
-    type: "THIẾT BỊ KÝ TỰ (CHARACTER DEVICE)",
-    visualMetaphor: "Cổng giao tiếp dạng màn hình + bàn phím hai chiều giữa người vận hành và hệ điều hành.",
-    technicalReality: "Thiết bị tty/pts liên kết với các file descriptor tiêu chuẩn (0: stdin, 1: stdout, 2: stderr).",
-    limitations: "Bỏ qua giao thức điều khiển dòng line discipline, escape sequence và cơ chế điều khiển phím.",
+    name: "I/O Console",
+    type: "THIẾT BỊ KÝ TỰ TTY",
+    visualMetaphor: "Console màn hình + bàn phím. Phản ứng khi nhận stdout hoặc gửi stdin.",
+    technicalReality: "Thiết bị tty/pts liên kết với FD 0/1/2 tiêu chuẩn.",
+    limitations: "Line discipline, escape sequence, và termios config được bỏ qua.",
   },
   kernel: {
-    name: "Hạt nhân Linux (Kernel Core)",
-    type: "TẦNG ĐIỀU PHỐI HỆ THỐNG",
-    visualMetaphor: "Lõi bát giác lớn trung tâm với nhiều vòng kết nối điều hòa mọi hoạt động trung gian.",
-    technicalReality: "Hạt nhân quản lý không gian địa chỉ, bảng FD, VFS, bộ lập lịch và truyền thông liên tiến trình (IPC).",
-    limitations: "Không phải một đơn nhân duy nhất; các cơ chế scheduler, VFS, memory management được biểu diễn cô đọng.",
+    name: "Kernel Core Spine",
+    type: "CƠ SỞ HẠ TẦNG HỆ THỐNG",
+    visualMetaphor: "Trục xương sống bát giác trung tâm với vòng kết nối điều phối.",
+    technicalReality: "Hạt nhân quản lý FD table, VFS, scheduler, IPC, memory management.",
+    limitations: "Không phải một process. Đây là cơ sở hạ tầng, không phải thực thể riêng biệt.",
   },
   pipe: {
-    name: "Đường ống Vô danh (Anonymous Pipe)",
+    name: "Pipe Conduit",
     type: "VÙNG ĐỆM BYTE HẠT NHÂN",
-    visualMetaphor: "Đường ống dẫn trong suốt định hướng nối từ đầu ra nguồn sang đầu vào đích.",
-    technicalReality: "Vùng đệm vòng tuần hoàn (circular buffer) trong RAM của hạt nhân, không thuộc sở hữu riêng của tiến trình.",
-    limitations: "Không phải tập tin trên đĩa, không có tên đường dẫn, không bảo toàn ranh giới thông điệp (stream-oriented).",
+    visualMetaphor: "Ống dẫn trong suốt có hướng giữa hai process bay.",
+    technicalReality: "Circular buffer trong kernel RAM. Unidirectional, stream-oriented.",
+    limitations: "Capacity phụ thuộc kernel config (thường 64KB nhưng không cố định).",
   },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────
 function collectSemanticIds(value: unknown, result = new Set<string>()): Set<string> {
   if (typeof value === "string") {
-    if (/^(process|pipe|file|device):/.test(value)) result.add(value);
+    if (/^(process|pipe|file|device|fd):/.test(value)) result.add(value);
     return result;
   }
   if (Array.isArray(value)) { value.forEach((v) => collectSemanticIds(v, result)); return result; }
@@ -231,6 +233,7 @@ function browserPresentation(fixtureId: string): NativeReplayPresentation {
   const fixture = browserFixtures[fixtureId];
   if (!fixture) throw new Error(`Kịch bản "${fixtureId}" không tồn tại trong bộ fixture.`);
   const exitedProcesses = new Set<string>();
+  /* Persistent lifecycle: once exited, stays exited across all subsequent frames */
   return {
     scenario_id: fixture.id,
     title: fixture.title,
@@ -243,12 +246,14 @@ function browserPresentation(fixtureId: string): NativeReplayPresentation {
         ids.forEach((id) => { if (id.startsWith("process:")) exitedProcesses.add(id); });
       }
       const ids = [...collectSemanticIds(envelope.event)];
-      const entities: readonly NativeSemanticEntity[] = ids.map((id) => ({
-        id,
-        kind: id.split(":")[0] || "unknown",
-        label: id,
-        lifecycle: exitedProcesses.has(id) ? { exited: { status: 0 } } : "active",
-      }));
+      const entities: readonly NativeSemanticEntity[] = ids
+        .filter((id) => !id.startsWith("fd:")) // FD entries are not top-level entities
+        .map((id) => ({
+          id,
+          kind: id.split(":")[0] || "unknown",
+          label: id,
+          lifecycle: exitedProcesses.has(id) ? { exited: { status: 0 } } : "active",
+        }));
       return {
         sequence: envelope.sequence,
         stage: envelope.stage,
@@ -256,7 +261,7 @@ function browserPresentation(fixtureId: string): NativeReplayPresentation {
         summary: eventSummaries[envelope.event.type] ?? envelope.event.type.replaceAll("_", " "),
         entities,
         relations: [] as const,
-        focus_candidates: ids,
+        focus_candidates: ids.filter((id) => !id.startsWith("fd:")),
         snapshot: { revision: envelope.sequence, entities, relations: [] as const },
       };
     }),
@@ -299,6 +304,70 @@ function focusedVisualEntity(frame: NativeReplayFrame): VisualEntityId {
   return "kernel";
 }
 
+/**
+ * Derive entity info from actual fixture evidence instead of hardcoding fake PIDs/FDs.
+ * Entity provenance comes from the frame's own evidence chain, not a global lookup.
+ */
+function deriveInfoCard(
+  entity: VisualEntityId,
+  frame: NativeReplayFrame | undefined,
+  history: readonly NativeReplayFrame[],
+): InfoCardView {
+  const base = entityCards[entity] ?? entityCards.overview;
+  if (!frame) return base;
+
+  /* Find matching entity in snapshot */
+  const matchingNode = frame.snapshot.entities.find(
+    (e) => e.id.includes(entity) || (entity === "overview" && false),
+  );
+
+  const isExited = matchingNode
+    ? typeof matchingNode.lifecycle === "object" || matchingNode.lifecycle === "exited"
+    : false;
+
+  /* Persistent lifecycle: check entire history for exit */
+  const everExited = history.some((f) =>
+    f.snapshot.entities.some(
+      (e) => e.id.includes(entity) && (typeof e.lifecycle === "object" || e.lifecycle === "exited"),
+    ),
+  );
+
+  const lifecycleStr = matchingNode
+    ? everExited || isExited
+      ? "ĐÃ KẾT THÚC"
+      : "ĐANG HOẠT ĐỘNG"
+    : entity === "kernel"
+      ? "HẠ TẦNG HOẠT ĐỘNG"
+      : undefined;
+
+  /* Derive FD info from evidence in history — only FDs actually mentioned */
+  const mentionedFds: string[] = [];
+  for (const f of history) {
+    for (const id of f.focus_candidates) {
+      if (id.startsWith(`fd:${entity}:`) || id.startsWith(`fd:${entity === "shell" ? "shell" : entity}:`)) {
+        const label = f.snapshot.entities.find((e) => e.id === id)?.label;
+        if (label && !mentionedFds.includes(label)) mentionedFds.push(label);
+      }
+    }
+  }
+
+  /* Derive relations from snapshot */
+  const activeRelations = frame.snapshot.relations
+    .filter((r) => r.from.includes(entity) || r.to.includes(entity))
+    .map((r) => `${r.from} → [${r.relation}] → ${r.to}`);
+
+  return {
+    ...base,
+    /* No fake PID — the fixture doesn't assign specific numeric PIDs */
+    lifecycle: lifecycleStr,
+    activeFds: mentionedFds.length > 0 ? mentionedFds : undefined,
+    relations: activeRelations.length > 0 ? activeRelations : undefined,
+    /* Honest evidence labeling */
+    evidenceSource: `Mô phỏng ngữ nghĩa (${frame.event_kind})`,
+    confidence: "Synthetic fixture — Không phải dữ liệu live",
+  };
+}
+
 // ─── App ──────────────────────────────────────────────────────────
 function DesktopApp() {
   const [presentation, setPresentation] = useState<NativeReplayPresentation>();
@@ -309,7 +378,7 @@ function DesktopApp() {
   const [playing, setPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(0.5);
   const [cameraMode, setCameraMode] = useState<CameraFollowMode>("gentle");
-  const [selectedEntity, setSelectedEntity] = useState<VisualEntityId>("kernel");
+  const [selectedEntity, setSelectedEntity] = useState<VisualEntityId>("overview");
   const [backend, setBackend] = useState<RenderBackend>("initializing");
   const [telemetry, setTelemetry] = useState<SceneTelemetry>();
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -321,8 +390,8 @@ function DesktopApp() {
   const [audioMuted, setAudioMuted] = useState(() => audioEngine.isMuted());
   const [audioVolume, setAudioVolume] = useState(() => audioEngine.getVolume());
   const loadedOnce = useRef(false);
+  const prevFrameIndex = useRef(-1);
 
-  // Unlock Web Audio Context upon first user interaction
   useEffect(() => {
     const unlock = () => {
       audioEngine.ensureContext();
@@ -353,14 +422,13 @@ function DesktopApp() {
       setPresentation(result);
       setSelectedScenarioId(result.scenario_id);
       setFrameIndex(0);
+      prevFrameIndex.current = -1;
       setStatus("ready");
       setPlaying(startPlaying);
-      audioEngine.playEvent("shell_started", -6.5);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setStatus("error");
       setPlaying(false);
-      audioEngine.playEvent("error", 0);
     }
   }
 
@@ -372,7 +440,7 @@ function DesktopApp() {
 
   useEffect(() => {
     if (!playing || !presentation) return undefined;
-    const intervalMs = Math.round(1150 / playbackSpeed);
+    const intervalMs = Math.round(1800 / playbackSpeed); // Slower default to let choreography breathe
     const timer = window.setInterval(() => {
       setFrameIndex((c) => {
         if (c >= presentation.frames.length - 1) { setPlaying(false); return c; }
@@ -399,21 +467,28 @@ function DesktopApp() {
   );
   const visualFrame = presentation?.frames[frameIndex] ? toVisualFrame(presentation.frames[frameIndex]) : undefined;
 
-  // Sync selectedEntity and trigger procedural semantic sound on frame change
+  /* Sync selectedEntity and play audio only when frame actually changes */
   useEffect(() => {
     const current = presentation?.frames[frameIndex];
-    if (current) {
-      const ent = focusedVisualEntity(current);
-      setSelectedEntity(ent);
-      const x = entityXPositions[ent] ?? 0;
-      audioEngine.playEvent(current.event_kind, x);
-      if (frameIndex === (presentation?.frames.length ?? 0) - 1) {
-        audioEngine.playEvent("completion", 0);
-      }
-    }
-  }, [frameIndex, presentation]);
+    if (!current) return;
+    if (frameIndex === prevFrameIndex.current) return; // Prevent duplicate audio
+    prevFrameIndex.current = frameIndex;
 
-  // Compute Event Board Items for the entire scenario
+    const ent = focusedVisualEntity(current);
+    setSelectedEntity(ent);
+    const x = entityXPositions[ent] ?? 0;
+    audioEngine.playEvent(current.event_kind, x);
+
+    /* Update audio ambience level based on how active the system is */
+    const activeCount = frameHistory.filter((f) => !f.eventKind.includes("exit") && !f.eventKind.includes("wait")).length;
+    audioEngine.setActivityLevel(Math.min(1, activeCount / Math.max(1, presentation?.frames.length ?? 1)));
+
+    if (frameIndex === (presentation?.frames.length ?? 0) - 1) {
+      audioEngine.playEvent("completion", 0);
+      audioEngine.setActivityLevel(0);
+    }
+  }, [frameIndex, presentation, frameHistory]);
+
   const allEvents: readonly EventBoardItem[] = useMemo(() => {
     if (!presentation) return [];
     return presentation.frames.map((f, idx) => ({
@@ -482,7 +557,7 @@ function DesktopApp() {
       setTerminalLines((c) => [
         ...c,
         `observer@synthetic:~$ ${command}`,
-        "MÔ PHỎNG NGỮ NGHĨA — ĐÃ XÁC THỰC QUA CHUỖI BẰNG CHỨNG",
+        "MÔ PHỎNG NGỮ NGHĨA — SYNTHETIC FIXTURE, KHÔNG PHẢI LIVE TRACE",
         `Đang khởi chạy kịch bản mô phỏng cho: ${command}`,
       ]);
       setTerminalInput("");
@@ -493,67 +568,21 @@ function DesktopApp() {
     setTerminalLines((c) => [
       ...c,
       `observer@synthetic:~$ ${command}`,
-      "Lệnh chưa được hỗ trợ trong bản mô phỏng hiện tại. Nhấp vào các chip kịch bản ở trên để chọn lệnh có sẵn.",
+      "Lệnh chưa được hỗ trợ. Chọn kịch bản có sẵn ở trên.",
     ]);
     audioEngine.playEvent("error", 0);
     setTerminalInput("");
   }
 
-  const currentInfoCard = useMemo((): InfoCardView => {
-    const base = entityCards[selectedEntity] ?? entityCards.overview;
-    const currentFrame = presentation?.frames[frameIndex];
-    if (!currentFrame) return base;
-
-    const matchingNode = currentFrame.snapshot.entities.find(
-      (e) => e.id.includes(selectedEntity) || (selectedEntity === "overview" && false),
-    );
-
-    const isExited =
-      matchingNode &&
-      (typeof matchingNode.lifecycle === "object"
-        ? true
-        : matchingNode.lifecycle === "exited");
-
-    const lifecycleStr = matchingNode
-      ? isExited
-        ? "ĐÃ KẾT THÚC (Trạng thái: 0)"
-        : "ĐANG HOẠT ĐỘNG (ACTIVE)"
-      : undefined;
-
-    const pidMap: Record<string, string> = {
-      shell: "PID 1000",
-      cat: "PID 1001",
-      grep: "PID 1002",
-      echo: "PID 1001",
-      ls: "PID 1001",
-      ps: "PID 1001",
-      kernel: "PID 0 [HẠT NHÂN]",
-    };
-
-    const fdMap: Record<string, readonly string[]> = {
-      shell: ["FD 0: /dev/tty (stdin)", "FD 1: /dev/tty (stdout)", "FD 2: /dev/tty (stderr)"],
-      cat: ["FD 0: /dev/tty", "FD 1: pipe:[1] (ghi luồng)", "FD 3: file.txt (đọc VFS)"],
-      grep: ["FD 0: pipe:[0] (đọc luồng)", "FD 1: /dev/tty (stdout)", "FD 2: /dev/tty"],
-      echo: ["FD 0: /dev/tty", "FD 1: sample.txt (chuyển hướng ghi)", "FD 2: /dev/tty"],
-      ls: ["FD 0: /dev/tty", "FD 1: /dev/tty (stdout)", "FD 3: /dir (getdents)"],
-      ps: ["FD 0: /dev/tty", "FD 1: /dev/tty (stdout)", "FD 3: /proc (virtual vfs)"],
-      pipe: ["Đầu đọc: pipe:[0]", "Đầu ghi: pipe:[1]", "Vùng đệm: 64KB kernel circular buffer"],
-    };
-
-    const activeRelations = currentFrame.snapshot.relations
-      .filter((r) => r.from.includes(selectedEntity) || r.to.includes(selectedEntity))
-      .map((r) => `${r.from} ➔ [${r.relation}] ➔ ${r.to}`);
-
-    return {
-      ...base,
-      pid: pidMap[selectedEntity],
-      lifecycle: lifecycleStr ?? (selectedEntity === "kernel" ? "HOẠT ĐỘNG LIÊN TỤC" : undefined),
-      activeFds: fdMap[selectedEntity],
-      relations: activeRelations.length > 0 ? activeRelations : undefined,
-      evidenceSource: `Syscall tracepoint (${currentFrame.event_kind})`,
-      confidence: "100% Xác thực (Synthetic verified)",
-    };
-  }, [selectedEntity, presentation, frameIndex]);
+  /* Derive info card from evidence, not hardcoded data */
+  const currentInfoCard = useMemo(
+    () => deriveInfoCard(
+      selectedEntity,
+      presentation?.frames[frameIndex],
+      presentation?.frames.slice(0, frameIndex + 1) ?? [],
+    ),
+    [selectedEntity, presentation, frameIndex],
+  );
 
   return (
     <LearningShell

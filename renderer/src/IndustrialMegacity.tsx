@@ -1,16 +1,18 @@
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import * as THREE from 'three';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { WebGPURenderer } from 'three/webgpu';
+
 import {
   resolveCameraDirective,
-  type CameraDirective,
-  type CameraFollowMode,
-  type VisualEntityId,
-} from "@linux-observatory/camera-director";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { WebGPURenderer } from "three/webgpu";
+  CameraDirective,
+  CameraFollowMode,
+  VisualEntityId
+} from '@linux-observatory/camera-director';
 
-export type RenderBackend = "initializing" | "webgpu" | "webgl2";
+// --- INTERFACES ---
+export type RenderBackend = 'initializing' | 'webgpu' | 'webgl2';
 
 export interface VisualReplayFrame {
   readonly sequence: number;
@@ -40,973 +42,557 @@ export interface IndustrialMegacityProps {
   readonly onTelemetry: (telemetry: SceneTelemetry) => void;
 }
 
-type ModuleEntityId = Exclude<VisualEntityId, "overview" | "pipe">;
-type BodyType = "console" | "intake" | "filter" | "emitter" | "scanner" | "probe" | "vault" | "gateway" | "core";
-
-interface ModuleDefinition {
-  readonly id: ModuleEntityId;
-  readonly label: string;
-  readonly position: readonly [number, number, number];
-  readonly color: string;
-  readonly height: number;
-  readonly body: BodyType;
+interface ChoreographyState {
+  phase: 'idle' | 'anticipation' | 'actuation' | 'transfer' | 'reaction' | 'settle';
+  phaseProgress: number;
+  totalProgress: number;
+  sourceModule: string | null;
+  targetModule: string | null;
+  flowActive: boolean;
+  flowProgress: number;
+  activeEventKind: string | null;
 }
 
-const allModules: readonly ModuleDefinition[] = [
-  { id: "shell", label: "SHELL [sh]", position: [-6.5, 0, -1], color: "#2563eb", height: 2.4, body: "console" },
-  { id: "cat", label: "CAT [cat]", position: [-2.2, 0, 1.2], color: "#d97706", height: 3.2, body: "intake" },
-  { id: "grep", label: "GREP [grep]", position: [3.2, 0, 1.2], color: "#059669", height: 3.3, body: "filter" },
-  { id: "echo", label: "ECHO [echo]", position: [-2.2, 0, 1.2], color: "#db2777", height: 3.2, body: "emitter" },
-  { id: "ls", label: "LS [ls]", position: [-2.2, 0, 1.2], color: "#7c3aed", height: 3.2, body: "scanner" },
-  { id: "ps", label: "PS [ps]", position: [-2.2, 0, 1.2], color: "#0891b2", height: 3.2, body: "probe" },
-  { id: "filesystem", label: "TẬP TIN [file]", position: [-3.6, 0, -5], color: "#4f46e5", height: 2.9, body: "vault" },
-  { id: "terminal", label: "TERMINAL [tty]", position: [3.6, 0, -5], color: "#0d9488", height: 2.9, body: "gateway" },
-  { id: "kernel", label: "KERNEL [nhân]", position: [0.5, 0, -3.4], color: "#6366f1", height: 4.2, body: "core" },
-] as const;
-
-// ─── Real Inter-Process Data Curves ──────────────────────────────
-const pipeCurve = new THREE.CatmullRomCurve3([
-  new THREE.Vector3(-0.65, 1.65, 1.2),
-  new THREE.Vector3(0.2, 2.7, 2.2),
-  new THREE.Vector3(1.45, 2.65, 2.1),
-  new THREE.Vector3(2.25, 1.7, 1.2),
-]);
-
-const fileToCatCurve = new THREE.CatmullRomCurve3([
-  new THREE.Vector3(-3.6, 1.2, -5),
-  new THREE.Vector3(-3.3, 2.1, -2.0),
-  new THREE.Vector3(-2.2, 1.6, 1.2),
-]);
-
-const grepToTerminalCurve = new THREE.CatmullRomCurve3([
-  new THREE.Vector3(3.2, 1.6, 1.2),
-  new THREE.Vector3(3.5, 2.1, -2.0),
-  new THREE.Vector3(3.6, 1.4, -5),
-]);
-
-const echoToFileCurve = new THREE.CatmullRomCurve3([
-  new THREE.Vector3(-2.2, 1.6, 1.2),
-  new THREE.Vector3(-2.9, 2.1, -2.0),
-  new THREE.Vector3(-3.6, 1.2, -5),
-]);
-
-const lsToTerminalCurve = new THREE.CatmullRomCurve3([
-  new THREE.Vector3(-2.2, 1.6, 1.2),
-  new THREE.Vector3(0.6, 2.5, -2.0),
-  new THREE.Vector3(3.6, 1.4, -5),
-]);
-
-// ─── Precomputed Static Geometries & Materials (Zero runtime allocation) ──
-const pipeTubeGeom = new THREE.TubeGeometry(pipeCurve, 48, 0.15, 10, false);
-const fileToCatTubeGeom = new THREE.TubeGeometry(fileToCatCurve, 32, 0.08, 8, false);
-const grepToTermTubeGeom = new THREE.TubeGeometry(grepToTerminalCurve, 32, 0.08, 8, false);
-const echoToFileTubeGeom = new THREE.TubeGeometry(echoToFileCurve, 32, 0.08, 8, false);
-const lsToTermTubeGeom = new THREE.TubeGeometry(lsToTerminalCurve, 32, 0.08, 8, false);
-
-const conduitGlassMaterial = new THREE.MeshStandardMaterial({
-  color: "#94a3b8",
-  metalness: 0.3,
-  roughness: 0.2,
-  transparent: true,
-  opacity: 0.28,
-  depthWrite: false,
-});
-
-const parentOfLineMaterial = new THREE.LineBasicMaterial({
-  color: "#94a3b8",
-  transparent: true,
-  opacity: 0.45,
-});
-
-const parentOfGeometries: Readonly<Record<string, THREE.BufferGeometry>> = {
-  cat: new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-6.5, 0.34, -1),
-    new THREE.Vector3(-4.35, 0.16, 0.1),
-    new THREE.Vector3(-2.2, 0.34, 1.2),
-  ]),
-  grep: new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-6.5, 0.34, -1),
-    new THREE.Vector3(-1.65, 0.16, 0.1),
-    new THREE.Vector3(3.2, 0.34, 1.2),
-  ]),
-  echo: new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-6.5, 0.34, -1),
-    new THREE.Vector3(-4.35, 0.16, 0.1),
-    new THREE.Vector3(-2.2, 0.34, 1.2),
-  ]),
-  ls: new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-6.5, 0.34, -1),
-    new THREE.Vector3(-4.35, 0.16, 0.1),
-    new THREE.Vector3(-2.2, 0.34, 1.2),
-  ]),
-  ps: new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(-6.5, 0.34, -1),
-    new THREE.Vector3(-4.35, 0.16, 0.1),
-    new THREE.Vector3(-2.2, 0.34, 1.2),
-  ]),
+// --- CONSTANTS & PRECOMPUTED RESOURCES ---
+const PLANT_COLORS = {
+  spine: 0x2c3e50,
+  spineRings: 0x34495e,
+  foundation: 0x1a252f,
+  rails: 0x7f8c8d,
+  shellBase: 0x34495e,
+  processBase: 0x4aa3df,
+  pipeChamber: 0xa9cce3,
+  storage: 0x27ae60,
+  console: 0x2c3e50,
+  screen: 0x050505,
+  glowGreen: 0x2ecc71,
+  glowAmber: 0xf39c12,
+  glowGrey: 0x7f8c8d,
+  flowHead: 0x3498db,
+  flowTail: 0x2980b9
 };
 
-function eventHasEntity(
-  history: readonly VisualReplayFrame[],
-  eventKind: string,
-  semanticId: string,
-) {
-  return history.some(
-    (e) => e.eventKind === eventKind && e.focusNodeIds.includes(semanticId),
-  );
-}
+const plantMaterials = {
+  spine: new THREE.MeshStandardMaterial({ color: PLANT_COLORS.spine, metalness: 0.8, roughness: 0.2 }),
+  spineRings: new THREE.MeshStandardMaterial({ color: PLANT_COLORS.spineRings, metalness: 0.9, roughness: 0.1 }),
+  foundation: new THREE.MeshStandardMaterial({ color: PLANT_COLORS.foundation, metalness: 0.7, roughness: 0.4 }),
+  rails: new THREE.MeshStandardMaterial({ color: PLANT_COLORS.rails, metalness: 0.9, roughness: 0.15 }),
+  shellBase: new THREE.MeshStandardMaterial({ color: PLANT_COLORS.shellBase, metalness: 0.7, roughness: 0.3 }),
+  processBase: new THREE.MeshStandardMaterial({ color: PLANT_COLORS.processBase, metalness: 0.6, roughness: 0.2 }),
+  pipeChamber: new THREE.MeshPhysicalMaterial({ color: PLANT_COLORS.pipeChamber, metalness: 0.1, roughness: 0.05, transmission: 0.9, transparent: true }),
+  storage: new THREE.MeshStandardMaterial({ color: PLANT_COLORS.storage, metalness: 0.7, roughness: 0.3 }),
+  console: new THREE.MeshStandardMaterial({ color: PLANT_COLORS.console, metalness: 0.8, roughness: 0.2 }),
+  screen: new THREE.MeshBasicMaterial({ color: PLANT_COLORS.screen }),
+  glowGreen: new THREE.MeshBasicMaterial({ color: PLANT_COLORS.glowGreen }),
+  glowAmber: new THREE.MeshBasicMaterial({ color: PLANT_COLORS.glowAmber }),
+  glowGrey: new THREE.MeshBasicMaterial({ color: PLANT_COLORS.glowGrey }),
+  flowHead: new THREE.MeshBasicMaterial({ color: PLANT_COLORS.flowHead }),
+  flowTail: new THREE.MeshBasicMaterial({ color: PLANT_COLORS.flowTail, transparent: true, opacity: 0.5 }),
+};
 
-// ─── Background ───────────────────────────────────────────────────
-function BackgroundStructures({ visible }: { readonly visible: boolean }) {
-  const mesh = useRef<THREE.InstancedMesh>(null);
-  const count = 72;
+const plantGeometries = {
+  octagonalColumn: new THREE.CylinderGeometry(1, 1, 12, 8),
+  ring: new THREE.TorusGeometry(1.5, 0.15, 8, 24),
+  foundationBox: new THREE.BoxGeometry(24, 0.5, 24),
+  railBox: new THREE.BoxGeometry(0.2, 0.2, 5),
+  moduleBox: new THREE.BoxGeometry(2, 2, 2),
+  pipe: new THREE.CylinderGeometry(0.4, 0.4, 4, 16),
+  hatch: new THREE.BoxGeometry(1.8, 1.8, 0.2),
+  screen: new THREE.PlaneGeometry(2, 1.5),
+  particle: new THREE.SphereGeometry(0.15, 8, 8),
+  led: new THREE.SphereGeometry(0.1, 8, 8),
+};
 
-  const blocks = useMemo(() => {
-    const items: Array<{ x: number; y: number; z: number; sx: number; sy: number; sz: number }> = [];
-    for (let i = 0; i < count; i += 1) {
-      const angle = i * 2.399963;
-      const radius = 12 + (i % 9) * 0.8;
-      items.push({
-        x: Math.cos(angle) * radius,
-        y: (0.6 + ((i * 13) % 23) / 9) / 2,
-        z: Math.sin(angle) * radius - 1.5,
-        sx: 0.55 + (i % 4) * 0.12,
-        sy: 0.6 + ((i * 13) % 23) / 9,
-        sz: 0.55 + ((i * 3) % 4) * 0.12,
-      });
-    }
-    return items;
-  }, []);
+const flowPaths = {
+  'storage-process': new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-2, 0.5, -3),
+    new THREE.Vector3(-1.8, 1.5, -1),
+    new THREE.Vector3(-1.5, 0.5, 2.5)
+  ]),
+  'process-pipe': new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-1.5, 0.5, 2.5),
+    new THREE.Vector3(-0.5, 0.5, 2.5),
+    new THREE.Vector3(0.5, 0.5, 2.5)
+  ]),
+  'pipe-grep': new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0.5, 0.5, 2.5),
+    new THREE.Vector3(1.5, 0.5, 2.5),
+    new THREE.Vector3(2.5, 0.5, 2.5)
+  ]),
+  'grep-console': new THREE.CatmullRomCurve3([
+    new THREE.Vector3(2.5, 0.5, 2.5),
+    new THREE.Vector3(2.8, 1.5, 0),
+    new THREE.Vector3(3, 0.5, -3)
+  ]),
+  'shell-process': new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-4, 0.5, 0),
+    new THREE.Vector3(-3, 1.5, 1),
+    new THREE.Vector3(-1.5, 0.5, 2.5)
+  ]),
+  'process-console': new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-1.5, 0.5, 2.5),
+    new THREE.Vector3(1, 1.5, -0.5),
+    new THREE.Vector3(3, 0.5, -3)
+  ]),
+  'process-storage': new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-1.5, 0.5, 2.5),
+    new THREE.Vector3(-1.8, 1.5, -1),
+    new THREE.Vector3(-2, 0.5, -3)
+  ])
+};
 
-  useLayoutEffect(() => {
-    if (!mesh.current) return;
-    const m = new THREE.Matrix4();
-    const p = new THREE.Vector3();
-    const s = new THREE.Vector3();
-    const c = new THREE.Color();
-    blocks.forEach((b, i) => {
-      p.set(b.x, b.y, b.z);
-      s.set(b.sx, b.sy, b.sz);
-      m.compose(p, new THREE.Quaternion(), s);
-      mesh.current?.setMatrixAt(i, m);
-      const tone = 0.82 + (i % 5) * 0.03;
-      c.setRGB(tone, tone * 1.02, tone * 1.05);
-      mesh.current?.setColorAt(i, c);
-    });
-    mesh.current.instanceMatrix.needsUpdate = true;
-    if (mesh.current.instanceColor) mesh.current.instanceColor.needsUpdate = true;
-  }, [blocks]);
+// --- CHOREOGRAPHY SYSTEM ---
+const PHASE_DURATIONS = {
+  anticipation: 0.3,
+  actuation: 0.4,
+  transfer: 0.6,
+  reaction: 0.3,
+  settle: 0.2
+};
+const TOTAL_DURATION = 1.8;
 
-  return (
-    <instancedMesh ref={mesh} args={[undefined, undefined, count]} visible={visible}>
-      <boxGeometry />
-      <meshStandardMaterial vertexColors roughness={0.88} metalness={0.15} />
-    </instancedMesh>
-  );
-}
-
-// ─── Label ────────────────────────────────────────────────────────
-function LabelSprite({
-  label,
-  position,
-  active,
-  scale = [3.4, 0.68, 1],
-  alwaysOnTop = false,
-}: {
-  readonly label: string;
-  readonly position: readonly [number, number, number];
-  readonly active: boolean;
-  readonly scale?: readonly [number, number, number];
-  readonly alwaysOnTop?: boolean;
-}) {
-  const texture = useMemo(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 512;
-    canvas.height = 100;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return new THREE.CanvasTexture(canvas);
-    ctx.fillStyle = active ? "rgba(255,255,255,0.96)" : "rgba(241,245,249,0.88)";
-    ctx.roundRect ? ctx.roundRect(4, 4, 504, 92, 12) : ctx.rect(4, 4, 504, 92);
-    ctx.fill();
-    ctx.strokeStyle = active ? "#2563eb" : "#94a3b8";
-    ctx.lineWidth = active ? 5 : 2;
-    ctx.stroke();
-    ctx.fillStyle = active ? "#0f172a" : "#475569";
-    ctx.font = "bold 32px 'Segoe UI', Consolas, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(label, 256, 50);
-    const t = new THREE.CanvasTexture(canvas);
-    t.colorSpace = THREE.SRGBColorSpace;
-    return t;
-  }, [active, label]);
-
-  useEffect(() => () => texture.dispose(), [texture]);
-
-  return (
-    <sprite position={position} scale={scale} renderOrder={alwaysOnTop ? 20 : 0}>
-      <spriteMaterial map={texture} transparent depthWrite={false} depthTest={!alwaysOnTop} />
-    </sprite>
-  );
-}
-
-// ─── Reusable Packet Stream (Zero allocation per frame) ───────────
-function PacketStream({
-  curve,
-  active,
-  color = "#2563eb",
-  count = 10,
-  speed = 0.65,
-}: {
-  readonly curve: THREE.Curve<THREE.Vector3>;
-  readonly active: boolean;
-  readonly color?: string;
-  readonly count?: number;
-  readonly speed?: number;
-}) {
-  const mesh = useRef<THREE.InstancedMesh>(null);
-  const m = useMemo(() => new THREE.Matrix4(), []);
-  const p = useMemo(() => new THREE.Vector3(), []);
-  const s = useMemo(() => new THREE.Vector3(), []);
-
-  useFrame((state) => {
-    if (!mesh.current) return;
-    for (let i = 0; i < count; i += 1) {
-      const progress = (state.clock.elapsedTime * speed + i / count) % 1;
-      curve.getPoint(progress, p);
-      s.setScalar(active ? 0.16 + (i % 3) * 0.02 : 0);
-      m.compose(p, new THREE.Quaternion(), s);
-      mesh.current.setMatrixAt(i, m);
-    }
-    mesh.current.instanceMatrix.needsUpdate = true;
+function useChoreography(frame: VisualReplayFrame | undefined, playing: boolean) {
+  const stateRef = useRef<ChoreographyState>({
+    phase: 'idle',
+    phaseProgress: 0,
+    totalProgress: 0,
+    sourceModule: null,
+    targetModule: null,
+    flowActive: false,
+    flowProgress: 0,
+    activeEventKind: null
   });
 
-  return (
-    <instancedMesh ref={mesh} args={[undefined, undefined, count]} frustumCulled={false}>
-      <sphereGeometry args={[1, 8, 8]} />
-      <meshStandardMaterial
-        color={color}
-        emissive={color}
-        emissiveIntensity={2.5}
-        roughness={0.1}
-      />
-    </instancedMesh>
-  );
-}
+  const lastSeq = useRef<number>(-1);
+  const timeInEvent = useRef<number>(0);
 
-// ─── Energy Pulse for Process Spawn on ParentOf Rail ──────────────
-function SpawnPulse({
-  active,
-  childPosition,
-}: {
-  readonly active: boolean;
-  readonly childPosition: readonly [number, number, number];
-}) {
-  const mesh = useRef<THREE.Mesh>(null);
-  const pStart = useMemo(() => new THREE.Vector3(-6.5, 0.34, -1), []);
-  const pMid = useMemo(() => new THREE.Vector3((-6.5 + childPosition[0]) / 2, 0.16, (-1 + childPosition[2]) / 2), [childPosition]);
-  const pEnd = useMemo(() => new THREE.Vector3(childPosition[0], 0.34, childPosition[2]), [childPosition]);
-
-  useFrame((state) => {
-    if (!mesh.current) return;
-    if (!active) {
-      mesh.current.visible = false;
-      return;
+  const getFlowMapping = (eventKind: string) => {
+    switch (eventKind) {
+      case 'exec': return { source: 'shell', target: 'process' };
+      case 'read': return { source: 'storage', target: 'process' };
+      case 'write': return { source: 'process', target: 'storage' };
+      case 'pipe': return { source: 'process', target: 'pipe' };
+      case 'grep': return { source: 'pipe', target: 'grep' };
+      case 'stdout': return { source: 'process', target: 'console' };
+      default: return { source: null, target: null };
     }
-    mesh.current.visible = true;
-    const t = (state.clock.elapsedTime * 2.4) % 1;
-    if (t < 0.5) {
-      mesh.current.position.lerpVectors(pStart, pMid, t * 2);
+  };
+
+  const update = useCallback((delta: number): ChoreographyState => {
+    if (!frame) {
+      stateRef.current.phase = 'idle';
+      return stateRef.current;
+    }
+
+    if (frame.sequence !== lastSeq.current) {
+      lastSeq.current = frame.sequence;
+      timeInEvent.current = 0;
+      const { source, target } = getFlowMapping(frame.eventKind);
+      stateRef.current.sourceModule = source;
+      stateRef.current.targetModule = target;
+      stateRef.current.activeEventKind = frame.eventKind;
+    }
+
+    if (playing) {
+      timeInEvent.current += delta;
     } else {
-      mesh.current.position.lerpVectors(pMid, pEnd, (t - 0.5) * 2);
+      timeInEvent.current = 0; // If not playing, hold at start
     }
-    mesh.current.scale.setScalar(0.24 * (1 - Math.abs(t - 0.5)));
-  });
 
-  return (
-    <mesh ref={mesh} visible={active}>
-      <sphereGeometry args={[1, 8, 8]} />
-      <meshBasicMaterial color="#38bdf8" />
-    </mesh>
-  );
-}
+    const t = timeInEvent.current;
+    if (t >= TOTAL_DURATION) {
+      stateRef.current.phase = 'idle';
+      stateRef.current.phaseProgress = 0;
+      stateRef.current.totalProgress = 1;
+      stateRef.current.flowActive = false;
+    } else {
+      let accum = 0;
+      stateRef.current.totalProgress = t / TOTAL_DURATION;
 
-// ─── Entity Module (with internal lifecycle motion & spindown) ────
-function EntityModule({
-  definition: d,
-  active,
-  executed,
-  exited,
-  highlighted,
-  selected,
-  onSelect,
-}: {
-  readonly definition: ModuleDefinition;
-  readonly active: boolean;
-  readonly executed: boolean;
-  readonly exited: boolean;
-  readonly highlighted: boolean;
-  readonly selected: boolean;
-  readonly onSelect: () => void;
-}) {
-  const [hovered, setHovered] = useState(false);
-  const spindle = useRef<THREE.Mesh>(null);
-  const moving = useRef<THREE.Mesh>(null);
-  const themeColor = useMemo(() => new THREE.Color(d.color), [d.color]);
-  const h = d.height;
-  const isStatic = d.body === "vault";
-
-  useFrame((state, delta) => {
-    // Process internal motion: spins smoothly when active, spins down when exited
-    if (spindle.current && !isStatic) {
-      if (exited) {
-        // Spindown deceleration settles to halt
-        spindle.current.rotation.y += delta * 0.04;
+      if (t < (accum += PHASE_DURATIONS.anticipation)) {
+        stateRef.current.phase = 'anticipation';
+        stateRef.current.phaseProgress = (t) / PHASE_DURATIONS.anticipation;
+        stateRef.current.flowActive = false;
+      } else if (t < (accum += PHASE_DURATIONS.actuation)) {
+        stateRef.current.phase = 'actuation';
+        stateRef.current.phaseProgress = (t - (accum - PHASE_DURATIONS.actuation)) / PHASE_DURATIONS.actuation;
+        stateRef.current.flowActive = false;
+      } else if (t < (accum += PHASE_DURATIONS.transfer)) {
+        stateRef.current.phase = 'transfer';
+        stateRef.current.phaseProgress = (t - (accum - PHASE_DURATIONS.transfer)) / PHASE_DURATIONS.transfer;
+        stateRef.current.flowActive = true;
+        stateRef.current.flowProgress = stateRef.current.phaseProgress;
+      } else if (t < (accum += PHASE_DURATIONS.reaction)) {
+        stateRef.current.phase = 'reaction';
+        stateRef.current.phaseProgress = (t - (accum - PHASE_DURATIONS.reaction)) / PHASE_DURATIONS.reaction;
+        stateRef.current.flowActive = false;
       } else {
-        spindle.current.rotation.y += delta * (active ? 2.8 : 0.4);
+        stateRef.current.phase = 'settle';
+        stateRef.current.phaseProgress = (t - (accum - PHASE_DURATIONS.settle)) / PHASE_DURATIONS.settle;
+        stateRef.current.flowActive = false;
       }
     }
-    // Harmonic piston vertical oscillation
-    if (moving.current) {
-      if (active && !exited) {
-        moving.current.position.y = h / 2 + 0.3 + Math.sin(state.clock.elapsedTime * 4.5) * 0.25;
-      } else {
-        moving.current.position.y = h / 2 + 0.3;
-      }
-    }
-  });
 
-  const emissiveI = exited ? 0.02 : highlighted ? 0.9 : active ? 0.45 : 0.05;
+    return stateRef.current;
+  }, [frame, playing]);
 
-  function body() {
-    switch (d.body) {
-      case "console":
-        return (
-          <>
-            <mesh position={[0, h * 0.3 + 0.34, 0]}>
-              <boxGeometry args={[2.8, h * 0.5, 2.2]} />
-              <meshStandardMaterial color="#e2e8f0" metalness={0.45} roughness={0.3} />
-            </mesh>
-            {[-1.1, 1.1].map((x, i) => (
-              <mesh key={i} position={[x, h * 0.35 + 0.34, 0]} rotation={[0, 0, Math.PI / 2]}>
-                <cylinderGeometry args={[0.04, 0.04, 2.0, 8]} />
-                <meshStandardMaterial color="#94a3b8" metalness={0.8} roughness={0.2} />
-              </mesh>
-            ))}
-            <mesh position={[0, h * 0.6 + 0.34, 0]}>
-              <cylinderGeometry args={[0.06, 0.06, h * 0.35, 8]} />
-              <meshStandardMaterial color="#475569" metalness={0.85} roughness={0.2} />
-            </mesh>
-            <mesh ref={spindle} position={[0, h * 0.42 + 0.34, 0]}>
-              <torusGeometry args={[0.55, 0.04, 8, 24]} />
-              <meshStandardMaterial color={d.color} emissive={themeColor} emissiveIntensity={emissiveI} metalness={0.7} roughness={0.2} />
-            </mesh>
-          </>
-        );
-
-      case "intake":
-        return (
-          <>
-            <mesh position={[0, h / 2 + 0.34, 0]}>
-              <cylinderGeometry args={[1.2, 0.75, h, 12]} />
-              <meshStandardMaterial color="#fffbeb" transparent opacity={0.55} metalness={0.25} roughness={0.12} />
-            </mesh>
-            <mesh ref={spindle} position={[0, h / 2 + 0.34, 0]}>
-              <cylinderGeometry args={[0.45, 0.45, h * 0.65, 12]} />
-              <meshStandardMaterial color={d.color} emissive={themeColor} emissiveIntensity={emissiveI} metalness={0.7} roughness={0.25} />
-            </mesh>
-            <mesh ref={moving} position={[0, h / 2 + 0.3, 0]}>
-              <cylinderGeometry args={[0.35, 0.35, 0.5, 16]} />
-              <meshStandardMaterial color="#92400e" metalness={0.6} roughness={0.25} />
-            </mesh>
-          </>
-        );
-
-      case "filter":
-        return (
-          <>
-            <mesh position={[0, h / 2 + 0.34, 0]}>
-              <boxGeometry args={[1.8, h, 1.6]} />
-              <meshStandardMaterial color="#ecfdf5" transparent opacity={0.3} metalness={0.2} roughness={0.08} depthWrite={false} />
-            </mesh>
-            {[-0.5, 0, 0.5].map((x, i) => (
-              <mesh key={i} position={[x, h / 2 + 0.34, 0]}>
-                <boxGeometry args={[0.06, h * 0.75, 1.35]} />
-                <meshStandardMaterial color={d.color} emissive={themeColor} emissiveIntensity={emissiveI} metalness={0.6} roughness={0.3} />
-              </mesh>
-            ))}
-            <mesh ref={moving} position={[0, h / 2 + 0.3, 0]}>
-              <boxGeometry args={[1.6, 0.12, 1.35]} />
-              <meshStandardMaterial color="#064e3b" metalness={0.7} roughness={0.2} />
-            </mesh>
-          </>
-        );
-
-      case "emitter":
-        return (
-          <>
-            <mesh position={[0, h / 2 + 0.34, 0]}>
-              <cylinderGeometry args={[0.35, 1.2, h, 12]} />
-              <meshStandardMaterial color="#fdf2f8" transparent opacity={0.45} metalness={0.3} roughness={0.1} depthWrite={false} />
-            </mesh>
-            <mesh ref={spindle} position={[0, h * 0.3 + 0.34, 0]}>
-              <coneGeometry args={[0.55, h * 0.5, 12]} />
-              <meshStandardMaterial color={d.color} emissive={themeColor} emissiveIntensity={emissiveI} metalness={0.6} roughness={0.25} />
-            </mesh>
-          </>
-        );
-
-      case "scanner":
-        return (
-          <>
-            <mesh position={[0, h * 0.35 + 0.34, 0]}>
-              <cylinderGeometry args={[0.28, 0.28, h * 0.65, 8]} />
-              <meshStandardMaterial color="#475569" metalness={0.75} roughness={0.25} />
-            </mesh>
-            <mesh ref={spindle} position={[0, h * 0.75 + 0.34, 0]}>
-              <cylinderGeometry args={[1.15, 0.95, 0.15, 16]} />
-              <meshStandardMaterial color={d.color} emissive={themeColor} emissiveIntensity={emissiveI} metalness={0.55} roughness={0.2} />
-            </mesh>
-            <mesh position={[0, h * 0.82 + 0.34, 0]}>
-              <sphereGeometry args={[0.2, 12, 12]} />
-              <meshStandardMaterial color="#c4b5fd" metalness={0.5} roughness={0.2} />
-            </mesh>
-          </>
-        );
-
-      case "probe":
-        return (
-          <>
-            <mesh position={[0, h / 2 + 0.34, 0]}>
-              <cylinderGeometry args={[0.12, 0.12, h, 8]} />
-              <meshStandardMaterial color="#475569" metalness={0.85} roughness={0.2} />
-            </mesh>
-            {[0.3, 0.5, 0.7].map((t, i) => (
-              <mesh key={i} position={[0, h * t + 0.34, 0]} rotation={[Math.PI / 2, 0, 0]}>
-                <torusGeometry args={[0.45 + i * 0.15, 0.04, 8, 24]} />
-                <meshStandardMaterial color={d.color} emissive={themeColor} emissiveIntensity={emissiveI} metalness={0.7} roughness={0.2} />
-              </mesh>
-            ))}
-          </>
-        );
-
-      case "vault":
-        return (
-          <>
-            <mesh position={[0, h / 2 + 0.34, 0]}>
-              <cylinderGeometry args={[1.05, 1.05, h, 6]} />
-              <meshStandardMaterial color="#e0e7ff" metalness={0.3} roughness={0.4} />
-            </mesh>
-            <mesh position={[0, h + 0.38, 0]}>
-              <cylinderGeometry args={[1.1, 1.1, 0.1, 6]} />
-              <meshStandardMaterial color="#94a3b8" metalness={0.5} roughness={0.3} />
-            </mesh>
-            <mesh position={[0, h * 0.45 + 0.34, 0]}>
-              <cylinderGeometry args={[0.4, 0.4, h * 0.35, 6]} />
-              <meshStandardMaterial color={d.color} emissive={themeColor} emissiveIntensity={0.15} metalness={0.5} roughness={0.3} />
-            </mesh>
-          </>
-        );
-
-      case "gateway":
-        return (
-          <>
-            <mesh position={[0, h * 0.55 + 0.34, -0.2]} rotation={[-0.3, 0, 0]}>
-              <boxGeometry args={[1.8, h * 0.45, 0.12]} />
-              <meshStandardMaterial color="#1e293b" metalness={0.3} roughness={0.2} />
-            </mesh>
-            <mesh position={[0, h * 0.55 + 0.34, -0.12]} rotation={[-0.3, 0, 0]}>
-              <planeGeometry args={[1.5, h * 0.35]} />
-              <meshBasicMaterial color={d.color} transparent opacity={active ? 0.55 : 0.15} />
-            </mesh>
-            <mesh position={[0, 0.5, 0.3]}>
-              <boxGeometry args={[1.8, 0.2, 1.2]} />
-              <meshStandardMaterial color="#cbd5e1" metalness={0.4} roughness={0.3} />
-            </mesh>
-            <mesh position={[0, h * 0.3 + 0.34, 0.55]}>
-              <boxGeometry args={[1.6, 0.08, 0.7]} />
-              <meshStandardMaterial color="#94a3b8" metalness={0.5} roughness={0.3} />
-            </mesh>
-          </>
-        );
-
-      case "core":
-        return (
-          <>
-            <mesh position={[0, h / 2 + 0.34, 0]}>
-              <cylinderGeometry args={[1.6, 1.6, h, 8]} />
-              <meshStandardMaterial color="#eef2ff" transparent opacity={0.35} metalness={0.25} roughness={0.08} depthWrite={false} />
-            </mesh>
-            <mesh ref={spindle} position={[0, h / 2 + 0.34, 0]}>
-              <cylinderGeometry args={[0.55, 0.55, h * 0.75, 8]} />
-              <meshStandardMaterial color={d.color} emissive={themeColor} emissiveIntensity={0.3} metalness={0.7} roughness={0.2} />
-            </mesh>
-            {[0.25, 0.45, 0.65, 0.85].map((t, i) => (
-              <mesh key={i} position={[0, h * t + 0.34, 0]} rotation={[Math.PI / 2, 0, 0]}>
-                <torusGeometry args={[1.05, 0.04, 8, 32]} />
-                <meshStandardMaterial color="#64748b" metalness={0.8} roughness={0.2} />
-              </mesh>
-            ))}
-          </>
-        );
-    }
-  }
-
-  return (
-    <group
-      position={d.position}
-      onClick={(e) => { e.stopPropagation(); onSelect(); }}
-      onPointerOver={(e) => {
-        e.stopPropagation();
-        setHovered(true);
-        document.body.style.cursor = "pointer";
-      }}
-      onPointerOut={() => {
-        setHovered(false);
-        document.body.style.cursor = "auto";
-      }}
-    >
-      {/* Shared precision machine pedestal */}
-      <mesh position={[0, 0.16, 0]}>
-        <cylinderGeometry args={[1.5, 1.7, 0.32, 16]} />
-        <meshStandardMaterial color="#94a3b8" metalness={0.65} roughness={0.25} />
-      </mesh>
-      <mesh position={[0, 0.34, 0]}>
-        <cylinderGeometry args={[1.35, 1.48, 0.08, 16]} />
-        <meshStandardMaterial color="#cbd5e1" metalness={0.7} roughness={0.2} />
-      </mesh>
-
-      {/* Entity-specific body */}
-      {body()}
-
-      {/* FD Sockets (Process-local file descriptors: FD 0, FD 1, FD 2) */}
-      {["console", "intake", "filter", "emitter", "scanner", "probe"].includes(d.body) && (
-        <group>
-          {/* FD 0 (stdin) */}
-          <group position={[-0.85, 0.48, 0.7]}>
-            <mesh rotation={[Math.PI / 4, 0, 0]}>
-              <cylinderGeometry args={[0.14, 0.16, 0.16, 12]} />
-              <meshStandardMaterial color="#334155" metalness={0.8} roughness={0.2} />
-            </mesh>
-            <mesh position={[0, 0.08, 0.05]}>
-              <sphereGeometry args={[0.06, 8, 8]} />
-              <meshBasicMaterial color="#0284c7" />
-            </mesh>
-            {(selected || hovered) && (
-              <LabelSprite label="FD 0 [stdin]" position={[0, 0.42, 0]} scale={[1.4, 0.32, 1]} active alwaysOnTop />
-            )}
-          </group>
-
-          {/* FD 1 (stdout) */}
-          <group position={[0.85, 0.48, 0.7]}>
-            <mesh rotation={[Math.PI / 4, 0, 0]}>
-              <cylinderGeometry args={[0.14, 0.16, 0.16, 12]} />
-              <meshStandardMaterial color="#334155" metalness={0.8} roughness={0.2} />
-            </mesh>
-            <mesh position={[0, 0.08, 0.05]}>
-              <sphereGeometry args={[0.06, 8, 8]} />
-              <meshBasicMaterial color="#d97706" />
-            </mesh>
-            {(selected || hovered) && (
-              <LabelSprite label="FD 1 [stdout]" position={[0, 0.42, 0]} scale={[1.4, 0.32, 1]} active alwaysOnTop />
-            )}
-          </group>
-
-          {/* FD 2 (stderr) */}
-          <group position={[0, 0.48, -0.85]}>
-            <mesh rotation={[-Math.PI / 4, 0, 0]}>
-              <cylinderGeometry args={[0.14, 0.16, 0.16, 12]} />
-              <meshStandardMaterial color="#334155" metalness={0.8} roughness={0.2} />
-            </mesh>
-            <mesh position={[0, 0.08, -0.05]}>
-              <sphereGeometry args={[0.06, 8, 8]} />
-              <meshBasicMaterial color="#dc2626" />
-            </mesh>
-            {(selected || hovered) && (
-              <LabelSprite label="FD 2 [stderr]" position={[0, 0.42, 0]} scale={[1.4, 0.32, 1]} active alwaysOnTop />
-            )}
-          </group>
-        </group>
-      )}
-
-      {/* Status dome */}
-      <mesh position={[0, h + 0.68, 0]}>
-        <sphereGeometry args={[0.28, 16, 16]} />
-        <meshStandardMaterial
-          color={exited ? "#64748b" : themeColor}
-          emissive={exited ? "#475569" : themeColor}
-          emissiveIntensity={exited ? 0.05 : highlighted ? 1.4 : executed ? 0.7 : active ? 0.4 : 0.1}
-          metalness={0.4}
-          roughness={0.2}
-        />
-      </mesh>
-
-      {/* Selection / hover / highlight ring */}
-      {(selected || hovered || highlighted) && (
-        <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-          <ringGeometry args={[1.75, 1.95, 48]} />
-          <meshBasicMaterial color={highlighted ? "#2563eb" : hovered ? "#0284c7" : themeColor} transparent opacity={0.95} />
-        </mesh>
-      )}
-
-      {/* Label */}
-      <LabelSprite
-        label={exited ? `${d.label} [ĐÃ DỪNG]` : d.label}
-        position={[0, h + 1.8, 0]}
-        active={active || highlighted || hovered}
-      />
-    </group>
-  );
+  return { stateRef, update };
 }
 
-// ─── Pipe Conduit ─────────────────────────────────────────────────
-function PipeConduit({
-  created,
-  active,
-  selected,
-  catStdoutBound,
-  grepStdinBound,
-  onSelect,
-}: {
-  readonly created: boolean;
-  readonly active: boolean;
-  readonly selected: boolean;
-  readonly catStdoutBound: boolean;
-  readonly grepStdinBound: boolean;
-  readonly onSelect: () => void;
-}) {
-  return (
-    <group visible={created} onClick={(e) => { e.stopPropagation(); onSelect(); }}>
-      <mesh geometry={pipeTubeGeom}>
-        <meshStandardMaterial
-          color="#0d9488"
-          emissive="#14b8a6"
-          emissiveIntensity={active ? 0.8 : 0.15}
-          metalness={0.5}
-          roughness={0.15}
-          transparent
-          opacity={created ? 0.85 : 0.2}
-        />
-      </mesh>
-      {[0.28, 0.52, 0.78].map((offset) => {
-        const point = pipeCurve.getPoint(offset);
-        const tangent = pipeCurve.getTangent(offset).normalize();
-        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), tangent);
-        return (
-          <mesh key={offset} position={point} quaternion={q}>
-            <coneGeometry args={[0.26, 0.55, 10]} />
-            <meshStandardMaterial color="#0d9488" emissive="#14b8a6" emissiveIntensity={active ? 1.6 : 0.3} metalness={0.6} roughness={0.2} />
-          </mesh>
-        );
-      })}
-      {selected && (
-        <mesh position={pipeCurve.getPoint(0.5)}>
-          <torusGeometry args={[0.65, 0.045, 8, 48]} />
-          <meshBasicMaterial color="#2563eb" />
-        </mesh>
-      )}
-      <LabelSprite label="ĐƯỜNG ỐNG VÔ DANH [pipe]" position={[0.75, 3.45, 2.15]} active={created || active} />
-      {catStdoutBound && (
-        <LabelSprite label="CAT STDOUT / FD 1" position={[-0.2, 0.85, 2.2]} active scale={[2.2, 0.42, 1]} alwaysOnTop />
-      )}
-      {grepStdinBound && (
-        <LabelSprite label="GREP STDIN / FD 0" position={[1.7, 0.7, 2.2]} active scale={[2.2, 0.42, 1]} alwaysOnTop />
-      )}
-    </group>
-  );
+// --- CAMERA DIRECTOR ---
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-// ─── Scenario Completion Indicator ────────────────────────────────
-function PipelineComplete({ visible }: { readonly visible: boolean }) {
-  const group = useRef<THREE.Group>(null);
-  useFrame((_, delta) => { if (group.current && visible) group.current.rotation.y += delta * 0.35; });
-  if (!visible) return null;
-  return (
-    <group ref={group} position={[0.5, 0.16, -3.4]}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[2.8, 0.05, 10, 72]} />
-        <meshBasicMaterial color="#2563eb" toneMapped={false} />
-      </mesh>
-      <LabelSprite label="KỊCH BẢN HOÀN THÀNH" position={[0, 6.6, 0]} active />
-      <pointLight position={[0, 3.2, 0]} intensity={18} distance={10} color="#3b82f6" />
-    </group>
-  );
-}
-
-// ─── Camera Rig ───────────────────────────────────────────────────
-function CameraDirectorRig({
-  directive,
-  cameraMode,
-}: {
-  readonly directive: CameraDirective;
-  readonly cameraMode: CameraFollowMode;
-}) {
+const CameraManager = ({ frame, frameHistory, cameraMode, totalFrames, selectedEntity }: {
+  frame: VisualReplayFrame | undefined;
+  frameHistory: readonly VisualReplayFrame[];
+  cameraMode?: CameraFollowMode | undefined;
+  totalFrames?: number | undefined;
+  selectedEntity: VisualEntityId;
+}) => {
   const { camera, gl } = useThree();
-  const controls = useMemo(() => new OrbitControls(camera, gl.domElement), [camera, gl]);
-  const fromPos = useRef(camera.position.clone());
-  const fromTgt = useRef(new THREE.Vector3());
-  const goalPos = useRef(new THREE.Vector3(...directive.position));
-  const goalTgt = useRef(new THREE.Vector3(...directive.target));
-  const progress = useRef(1);
-  const prevKey = useRef("");
-  const userOrbiting = useRef(false);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const targetPos = useMemo(() => new THREE.Vector3(), []);
+  const targetLook = useMemo(() => new THREE.Vector3(), []);
+  const startPos = useMemo(() => new THREE.Vector3(), []);
+  const startLook = useMemo(() => new THREE.Vector3(), []);
+  
+  const isTransitioning = useRef(false);
+  const transitionProgress = useRef(0);
+  const lastTargetHash = useRef('');
 
   useEffect(() => {
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
-    controls.minDistance = 4;
-    controls.maxDistance = 42;
-    controls.maxPolarAngle = Math.PI * 0.48;
-    controls.target.set(0, 1.2, -1);
-    const onStart = () => { userOrbiting.current = true; progress.current = 1; };
-    const onEnd = () => { userOrbiting.current = false; };
-    controls.addEventListener("start", onStart);
-    controls.addEventListener("end", onEnd);
-    return () => { controls.removeEventListener("start", onStart); controls.removeEventListener("end", onEnd); controls.dispose(); };
-  }, [controls]);
-
-  useEffect(() => {
-    if (cameraMode === "free") return;
-    const key = cameraMode === "gentle"
-      ? `${directive.beat}-${directive.entityId}`
-      : `${directive.sequence}-${directive.entityId}`;
-    if (key === prevKey.current) return;
-    prevKey.current = key;
-    fromPos.current.copy(camera.position);
-    fromTgt.current.copy(controls.target);
-    goalPos.current.set(...directive.position);
-    goalTgt.current.set(...directive.target);
-    progress.current = 0;
-  }, [camera, cameraMode, controls, directive]);
-
-  useFrame((_, delta) => {
-    if (cameraMode !== "free" && !userOrbiting.current && progress.current < 1) {
-      progress.current = Math.min(1, progress.current + delta / 2.4);
-      const t = progress.current;
-      const smooth = t * t * (3 - 2 * t);
-      camera.position.lerpVectors(fromPos.current, goalPos.current, smooth);
-      controls.target.lerpVectors(fromTgt.current, goalTgt.current, smooth);
+    if (!controlsRef.current) {
+      const ctrl = new OrbitControls(camera, gl.domElement);
+      ctrl.enableDamping = true;
+      ctrl.dampingFactor = 0.05;
+      ctrl.minDistance = 4;
+      ctrl.maxDistance = 42;
+      ctrl.maxPolarAngle = Math.PI * 0.48;
+      ctrl.target.set(0, 1.2, 0);
+      controlsRef.current = ctrl;
     }
-    controls.update();
+
+    return () => {
+      controlsRef.current?.dispose();
+    };
+  }, [camera, gl.domElement]);
+
+  useFrame((_state, delta) => {
+    if (!controlsRef.current) return;
+
+    const mode = cameraMode ?? 'gentle';
+    const focusIds = frame?.focusNodeIds ?? [];
+    const stage = frame?.stage ?? 'overview';
+    const seq = frame?.sequence ?? 0;
+    const total = totalFrames ?? 1;
+
+    const directive = resolveCameraDirective(focusIds, stage, seq, total, mode);
+
+    const currentHash = `${directive.position.join(',')}-${directive.target.join(',')}`;
+    if (currentHash !== lastTargetHash.current) {
+      lastTargetHash.current = currentHash;
+      startPos.copy(camera.position);
+      startLook.copy(controlsRef.current.target);
+      targetPos.set(...directive.position);
+      targetLook.set(...directive.target);
+      isTransitioning.current = true;
+      transitionProgress.current = 0;
+    }
+
+    if (isTransitioning.current) {
+      transitionProgress.current += delta;
+      const t = Math.min(transitionProgress.current / 1.0, 1.0);
+      const eased = easeInOutCubic(t);
+      
+      camera.position.lerpVectors(startPos, targetPos, eased);
+      controlsRef.current.target.lerpVectors(startLook, targetLook, eased);
+
+      if (t >= 1.0) {
+        isTransitioning.current = false;
+      }
+    }
+
+    controlsRef.current.update();
   });
 
   return null;
-}
+};
 
-// ─── Telemetry Probe ──────────────────────────────────────────────
-function TelemetryProbe({ onTelemetry }: { readonly onTelemetry: (v: SceneTelemetry) => void }) {
-  const { gl, scene } = useThree();
-  const elapsed = useRef(0);
+// --- TELEMETRY ---
+const TelemetryProbe = ({ onTelemetry }: { onTelemetry: (telemetry: SceneTelemetry) => void }) => {
+  const { gl } = useThree();
+  const lastTime = useRef(performance.now());
   const frames = useRef(0);
 
-  useFrame((_, delta) => {
-    elapsed.current += delta;
-    frames.current += 1;
-    if (elapsed.current < 1) return;
-    let vis = 0;
-    scene.traverse((o) => { if (o.visible) vis += 1; });
-    const info = (gl as THREE.WebGLRenderer).info?.render;
-    onTelemetry({
-      fps: frames.current / elapsed.current,
-      frameTimeMs: (elapsed.current * 1000) / frames.current,
-      drawCalls: info?.calls ?? 0,
-      triangles: info?.triangles ?? 0,
-      visibleObjects: vis,
-    });
-    elapsed.current = 0;
-    frames.current = 0;
+  useFrame(() => {
+    frames.current++;
+    const now = performance.now();
+    const elapsed = now - lastTime.current;
+    
+    if (elapsed >= 1000) {
+      const fps = Math.round((frames.current * 1000) / elapsed);
+      const info = gl.info;
+      
+      onTelemetry({
+        fps,
+        frameTimeMs: elapsed / frames.current,
+        drawCalls: info.render.calls,
+        triangles: info.render.triangles,
+        visibleObjects: info.render.points // Rough proxy for visible objects in webgl info
+      });
+      
+      frames.current = 0;
+      lastTime.current = now;
+    }
   });
 
   return null;
-}
+};
 
-// ─── Scene (Single Unified Mechanical Observatory) ─────────────────
-function Scene({
+// --- MODULE COMPONENTS ---
+const Spine = () => {
+  const rings = [2, 5, 8, -2];
+  return (
+    <group position={[0, 0, 0]}>
+      <mesh geometry={plantGeometries.octagonalColumn} material={plantMaterials.spine} />
+      {rings.map((y, i) => (
+        <mesh key={i} geometry={plantGeometries.ring} material={plantMaterials.spineRings} position={[0, y, 0]} rotation={[Math.PI / 2, 0, 0]} />
+      ))}
+    </group>
+  );
+};
+
+const Foundation = () => (
+  <mesh geometry={plantGeometries.foundationBox} material={plantMaterials.foundation} position={[0, -5, 0]} />
+);
+
+const RoutingRails = () => (
+  <group>
+    {/* Shell to Process */}
+    <mesh geometry={plantGeometries.railBox} material={plantMaterials.rails} position={[-2.75, -2, 1.25]} rotation={[0, Math.PI/4, 0]} />
+    {/* Spine to Process */}
+    <mesh geometry={plantGeometries.railBox} material={plantMaterials.rails} position={[-0.75, -2, 1.25]} rotation={[0, -Math.PI/4, 0]} />
+    {/* Spine to Grep */}
+    <mesh geometry={plantGeometries.railBox} material={plantMaterials.rails} position={[1.25, -2, 1.25]} rotation={[0, Math.PI/4, 0]} />
+  </group>
+);
+
+const ModuleLed = ({ active, executing, position }: { active: boolean, executing: boolean, position: [number, number, number] }) => {
+  const material = executing ? plantMaterials.glowAmber : (active ? plantMaterials.glowGreen : plantMaterials.glowGrey);
+  return <mesh geometry={plantGeometries.led} material={material} position={position} />;
+};
+
+const ShellBay = ({ state }: { state: ChoreographyState }) => {
+  const isActive = state.sourceModule === 'shell' || state.targetModule === 'shell';
+  const isExecuting = isActive && state.phase === 'actuation';
+  const hatchRef = useRef<THREE.Group>(null);
+
+  useFrame(() => {
+    if (!hatchRef.current) return;
+    if (isActive && state.phase !== 'idle' && state.phase !== 'settle') {
+      hatchRef.current.rotation.z = Math.PI / 4;
+    } else {
+      hatchRef.current.rotation.z = 0;
+    }
+  });
+
+  return (
+    <group position={[-4, 0, 0]}>
+      <mesh geometry={plantGeometries.moduleBox} material={plantMaterials.shellBase} />
+      <group ref={hatchRef} position={[1, 0, 0]}>
+        <mesh geometry={plantGeometries.hatch} material={plantMaterials.rails} position={[0, 0, 0]} rotation={[0, Math.PI/2, 0]} />
+      </group>
+      <ModuleLed active={isActive} executing={isExecuting} position={[0, 1.2, 0]} />
+    </group>
+  );
+};
+
+const ProcessBay = ({ state }: { state: ChoreographyState }) => {
+  const isActive = state.sourceModule === 'process' || state.targetModule === 'process';
+  const isExecuting = isActive && state.phase === 'actuation';
+  
+  return (
+    <group position={[-1.5, 0, 2.5]}>
+      <mesh geometry={plantGeometries.moduleBox} material={plantMaterials.processBase} />
+      <mesh geometry={plantGeometries.pipe} material={plantMaterials.spine} position={[0, 1, 0]} scale={[0.5, 0.5, 0.5]} />
+      <ModuleLed active={isActive} executing={isExecuting} position={[0, 1.2, 1]} />
+    </group>
+  );
+};
+
+const GrepBay = ({ state }: { state: ChoreographyState }) => {
+  const isActive = state.sourceModule === 'grep' || state.targetModule === 'grep';
+  const isExecuting = isActive && state.phase === 'actuation';
+  
+  return (
+    <group position={[2.5, 0, 2.5]}>
+      <mesh geometry={plantGeometries.moduleBox} material={plantMaterials.processBase} />
+      <mesh geometry={plantGeometries.hatch} material={plantMaterials.rails} position={[0, 1, 0]} rotation={[Math.PI/2, 0, 0]} />
+      <ModuleLed active={isActive} executing={isExecuting} position={[0, 1.2, 1]} />
+    </group>
+  );
+};
+
+const PipeChamber = ({ state }: { state: ChoreographyState }) => {
+  const isActive = state.targetModule === 'pipe';
+  const isExecuting = isActive && state.phase === 'transfer';
+  
+  return (
+    <group position={[0.5, 0, 2.5]}>
+      <mesh geometry={plantGeometries.pipe} material={plantMaterials.pipeChamber} rotation={[0, 0, Math.PI/2]} />
+      <ModuleLed active={isActive} executing={isExecuting} position={[0, 0.5, 0.5]} />
+    </group>
+  );
+};
+
+const StorageAssembly = ({ state }: { state: ChoreographyState }) => {
+  const isActive = state.sourceModule === 'storage' || state.targetModule === 'storage';
+  const isExecuting = isActive && state.phase === 'actuation';
+  
+  return (
+    <group position={[-2, 0, -3]}>
+      <mesh geometry={plantGeometries.moduleBox} material={plantMaterials.storage} scale={[1.2, 1.5, 1.2]} />
+      <ModuleLed active={isActive} executing={isExecuting} position={[0, 1.6, 0]} />
+    </group>
+  );
+};
+
+const IOConsole = ({ state }: { state: ChoreographyState }) => {
+  const isActive = state.sourceModule === 'console' || state.targetModule === 'console';
+  const isExecuting = isActive && state.phase === 'reaction';
+  
+  return (
+    <group position={[3, 0, -3]}>
+      <mesh geometry={plantGeometries.moduleBox} material={plantMaterials.console} />
+      <mesh geometry={plantGeometries.screen} material={isExecuting ? plantMaterials.glowAmber : plantMaterials.screen} position={[-0.1, 0.5, 1.01]} rotation={[-Math.PI/6, 0, 0]} />
+      <ModuleLed active={isActive} executing={isExecuting} position={[0, 1.2, 1]} />
+    </group>
+  );
+};
+
+const FlowPackets = ({ state, choreographyUpdate }: { state: React.MutableRefObject<ChoreographyState>, choreographyUpdate: (delta: number) => ChoreographyState }) => {
+  const maxParticles = 24;
+  const instancedMeshRef = useRef<THREE.InstancedMesh>(null);
+  
+  const scratchMatrix = useMemo(() => new THREE.Matrix4(), []);
+  const scratchPos = useMemo(() => new THREE.Vector3(), []);
+  const scratchScale = useMemo(() => new THREE.Vector3(1, 1, 1), []);
+  const scratchQuat = useMemo(() => new THREE.Quaternion(), []);
+  const scratchColor = useMemo(() => new THREE.Color(), []);
+
+  useFrame((r3fState, delta) => {
+    const currentState = choreographyUpdate(delta);
+    if (!instancedMeshRef.current) return;
+    
+    // Hide all particles by default
+    scratchScale.set(0, 0, 0);
+    for (let i = 0; i < maxParticles; i++) {
+      scratchMatrix.compose(scratchPos, scratchQuat, scratchScale);
+      instancedMeshRef.current.setMatrixAt(i, scratchMatrix);
+    }
+
+    if (currentState.flowActive && currentState.sourceModule && currentState.targetModule) {
+      const pathKey = `${currentState.sourceModule}-${currentState.targetModule}`;
+      const curve = (flowPaths as any)[pathKey] as THREE.CatmullRomCurve3 | undefined;
+      
+      if (curve) {
+        // Draw head
+        const headProgress = currentState.flowProgress;
+        curve.getPointAt(headProgress, scratchPos);
+        scratchScale.set(1.5, 1.5, 1.5);
+        scratchMatrix.compose(scratchPos, scratchQuat, scratchScale);
+        instancedMeshRef.current.setMatrixAt(0, scratchMatrix);
+        scratchColor.setHex(PLANT_COLORS.flowHead);
+        instancedMeshRef.current.setColorAt(0, scratchColor);
+
+        // Draw tail
+        for (let i = 1; i < 5; i++) {
+          const tailProgress = Math.max(0, headProgress - (i * 0.05));
+          if (tailProgress > 0) {
+            curve.getPointAt(tailProgress, scratchPos);
+            const scale = 1.0 - (i * 0.15);
+            scratchScale.set(scale, scale, scale);
+            scratchMatrix.compose(scratchPos, scratchQuat, scratchScale);
+            instancedMeshRef.current.setMatrixAt(i, scratchMatrix);
+            scratchColor.setHex(PLANT_COLORS.flowTail);
+            instancedMeshRef.current.setColorAt(i, scratchColor);
+          }
+        }
+      }
+    }
+    
+    instancedMeshRef.current.instanceMatrix.needsUpdate = true;
+    if (instancedMeshRef.current.instanceColor) {
+      instancedMeshRef.current.instanceColor.needsUpdate = true;
+    }
+  });
+
+  return (
+    <instancedMesh ref={instancedMeshRef} args={[plantGeometries.particle, plantMaterials.flowHead, maxParticles]}>
+      <instancedBufferAttribute attach="instanceColor" args={[new Float32Array(maxParticles * 3), 3]} />
+    </instancedMesh>
+  );
+};
+
+// --- MAIN PLANT SCENE ---
+const UnifiedPlant = ({ frame, playing }: { frame: VisualReplayFrame | undefined, playing: boolean }) => {
+  const { stateRef, update } = useChoreography(frame, playing);
+  
+  return (
+    <group>
+      <Spine />
+      <Foundation />
+      <RoutingRails />
+      <ShellBay state={stateRef.current} />
+      <ProcessBay state={stateRef.current} />
+      <GrepBay state={stateRef.current} />
+      <PipeChamber state={stateRef.current} />
+      <StorageAssembly state={stateRef.current} />
+      <IOConsole state={stateRef.current} />
+      <FlowPackets state={stateRef} choreographyUpdate={update} />
+    </group>
+  );
+};
+
+// --- ROOT COMPONENT ---
+export const IndustrialMegacity: React.FC<IndustrialMegacityProps> = ({
   frame,
   frameHistory,
   playing,
-  cameraMode = "gentle",
-  totalFrames = 1,
+  cameraMode,
+  totalFrames,
   selectedEntity,
   onSelectEntity,
   onTelemetry,
-}: Omit<IndustrialMegacityProps, "onBackendChange">) {
-  const focusIds = frame?.focusNodeIds ?? [];
-  const directive = useMemo(
-    () => resolveCameraDirective(focusIds, frame?.stage ?? "overview", frame?.sequence ?? 0, totalFrames, cameraMode),
-    [focusIds, frame?.sequence, frame?.stage, totalFrames, cameraMode],
-  );
-
-  const hasShell = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("shell")));
-  const hasCat = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("cat")));
-  const hasGrep = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("grep")));
-  const hasEcho = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("echo")));
-  const hasLs = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("ls")));
-  const hasPs = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("ps")));
-  const hasFs = frameHistory.some((e) => e.focusNodeIds.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc")));
-  const hasTerm = frameHistory.some((e) => e.focusNodeIds.some((id) => id.includes("tty") || id.includes("terminal")));
-  const pipeCreated = frameHistory.some((e) => e.eventKind === "pipe_created");
-  const catStdoutBound = eventHasEntity(frameHistory, "file_descriptor_duplicated", "process:cat");
-  const grepStdinBound = eventHasEntity(frameHistory, "file_descriptor_duplicated", "process:grep");
-
-  // Real Flow Activity Detectors
-  const pipeFlow = frame?.stage === "pipe_io" && ["bytes_read", "bytes_written"].includes(frame?.eventKind ?? "");
-  const fileToCatFlow = hasCat && (frame?.stage === "file_io" || frame?.eventKind === "file_opened" || (frame?.eventKind === "bytes_read" && !frame?.focusNodeIds.some((id) => id.startsWith("pipe:"))));
-  const grepToTermFlow = hasGrep && (frame?.stage === "terminal_io" || (frame?.eventKind === "bytes_written" && frame?.focusNodeIds.some((id) => id.includes("grep") || id.includes("tty") || id.includes("terminal"))));
-  const echoToFileFlow = hasEcho && (frame?.eventKind === "bytes_written" || frame?.stage === "file_io");
-  const lsToTermFlow = hasLs && (frame?.eventKind === "bytes_written" || frame?.stage === "terminal_io");
-  const isForkingOrExec = frame?.eventKind === "process_forked" || frame?.eventKind === "process_executed";
-
-  const pipelineComplete = totalFrames > 0 && (frame?.sequence ?? 0) >= totalFrames && ["process_waited", "exit", "wait"].includes(frame?.eventKind ?? "");
-
-  const activeModules = useMemo(() => {
-    return allModules.filter((m) => {
-      if (m.id === "kernel" || m.id === "shell") return true;
-      if (m.id === "cat") return hasCat;
-      if (m.id === "grep") return hasGrep;
-      if (m.id === "echo") return hasEcho;
-      if (m.id === "ls") return hasLs;
-      if (m.id === "ps") return hasPs;
-      if (m.id === "filesystem") return hasFs;
-      if (m.id === "terminal") return hasTerm;
-      return false;
-    });
-  }, [hasCat, hasEcho, hasFs, hasGrep, hasLs, hasPs, hasTerm]);
-
-  const highlightedEntity = directive.entityId;
+  onBackendChange
+}) => {
+  
+  useEffect(() => {
+    onBackendChange('webgl2'); // Inform parent we are initialized
+  }, [onBackendChange]);
 
   return (
-    <>
-      <color attach="background" args={["#eef2f6"]} />
-      <fog attach="fog" args={["#eef2f6", 20, 52]} />
-
-      <ambientLight intensity={0.75} color="#ffffff" />
-      <hemisphereLight args={["#ffffff", "#e2e8f0", 0.9]} />
-      <directionalLight position={[10, 16, 8]} intensity={1.25} color="#ffffff" />
-      <pointLight position={[0.5, 5, -3.4]} intensity={14} distance={14} color="#6366f1" />
-      <pointLight position={[0.8, 4, 2]} intensity={pipeFlow ? 22 : 8} distance={10} color="#0d9488" />
-
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.03, 0]}>
-        <planeGeometry args={[80, 80]} />
-        <meshStandardMaterial color="#f8fafc" roughness={0.9} metalness={0.05} />
-      </mesh>
-      <gridHelper args={[70, 70, "#cbd5e1", "#e2e8f0"]} position={[0, 0.01, 0]} />
-
-      <BackgroundStructures visible />
-
-      {/* Process Modules */}
-      {activeModules.map((def) => {
-        const isProcess = ["cat", "grep", "echo", "ls", "ps"].includes(def.id);
-        const isActive = def.id === "kernel" || (def.id === "shell" && hasShell) ||
-          (isProcess && frameHistory.some((e) => e.focusNodeIds.includes(`process:${def.id}`))) ||
-          (def.id === "filesystem" && hasFs) || (def.id === "terminal" && hasTerm);
-        const isExecuted = isProcess && eventHasEntity(frameHistory, "process_executed", `process:${def.id}`);
-        const isExited = isProcess && eventHasEntity(frameHistory, "process_exited", `process:${def.id}`);
-        return (
-          <EntityModule
-            key={def.id}
-            definition={def}
-            active={isActive}
-            executed={isExecuted}
-            exited={isExited}
-            highlighted={highlightedEntity === def.id}
-            selected={selectedEntity === def.id}
-            onSelect={() => onSelectEntity(def.id)}
-          />
-        );
-      })}
-
-      {/* ParentOf Orchestration Conduits & Spawn Pulses (Precomputed, Zero Allocation) */}
-      {hasShell && activeModules.filter((m) => ["cat", "grep", "echo", "ls", "ps"].includes(m.id)).map((child) => {
-        const geom = parentOfGeometries[child.id];
-        if (!geom) return null;
-        return (
-          <group key={`parentof-group-${child.id}`}>
-            <primitive object={new THREE.Line(geom, parentOfLineMaterial)} />
-            <SpawnPulse active={isForkingOrExec} childPosition={child.position} />
-          </group>
-        );
-      })}
-
-      {/* File -> CAT Conduit & Data Packet Stream */}
-      {hasCat && (
-        <group>
-          <mesh geometry={fileToCatTubeGeom} material={conduitGlassMaterial} />
-          <PacketStream curve={fileToCatCurve} active={fileToCatFlow} color="#d97706" count={8} speed={0.7} />
-        </group>
-      )}
-
-      {/* Anonymous Pipe Conduit & Data Packet Stream */}
-      <PipeConduit
-        created={pipeCreated}
-        active={pipeFlow || (playing && highlightedEntity === "pipe")}
-        selected={selectedEntity === "pipe"}
-        catStdoutBound={catStdoutBound}
-        grepStdinBound={grepStdinBound}
-        onSelect={() => onSelectEntity("pipe")}
-      />
-      <PacketStream curve={pipeCurve} active={pipeFlow} color="#0d9488" count={12} speed={0.6} />
-
-      {/* GREP -> Terminal Conduit & Data Packet Stream */}
-      {hasGrep && (
-        <group>
-          <mesh geometry={grepToTermTubeGeom} material={conduitGlassMaterial} />
-          <PacketStream curve={grepToTerminalCurve} active={grepToTermFlow} color="#059669" count={8} speed={0.7} />
-        </group>
-      )}
-
-      {/* ECHO -> File Conduit & Data Packet Stream */}
-      {hasEcho && (
-        <group>
-          <mesh geometry={echoToFileTubeGeom} material={conduitGlassMaterial} />
-          <PacketStream curve={echoToFileCurve} active={echoToFileFlow} color="#db2777" count={8} speed={0.7} />
-        </group>
-      )}
-
-      {/* LS -> Terminal Conduit & Data Packet Stream */}
-      {hasLs && (
-        <group>
-          <mesh geometry={lsToTermTubeGeom} material={conduitGlassMaterial} />
-          <PacketStream curve={lsToTerminalCurve} active={lsToTermFlow} color="#7c3aed" count={8} speed={0.7} />
-        </group>
-      )}
-
-      <PipelineComplete visible={pipelineComplete} />
-
-      <CameraDirectorRig directive={directive} cameraMode={cameraMode} />
-      <TelemetryProbe onTelemetry={onTelemetry} />
-    </>
+    <div style={{ width: '100%', height: '100%', background: '#050505' }}>
+      <Canvas shadows camera={{ position: [0, 15, 20], fov: 45 }}>
+        <color attach="background" args={['#0a0a1a']} />
+        <fog attach="fog" args={['#0a0a1a', 25, 60]} />
+        
+        <ambientLight intensity={0.2} />
+        <hemisphereLight args={[0x4aa3df, 0x1a252f, 0.4]} />
+        <directionalLight position={[10, 20, 10]} intensity={1.5} castShadow />
+        
+        <CameraManager frame={frame} frameHistory={frameHistory} cameraMode={cameraMode} totalFrames={totalFrames} selectedEntity={selectedEntity} />
+        <TelemetryProbe onTelemetry={onTelemetry} />
+        
+        <UnifiedPlant frame={frame} playing={playing} />
+        
+        {/* Background Grid */}
+        <gridHelper args={[100, 100, 0x1a252f, 0x1a252f]} position={[0, -4.9, 0]} />
+      </Canvas>
+    </div>
   );
-}
+};
 
-export function IndustrialMegacity(props: IndustrialMegacityProps) {
-  return (
-    <Canvas
-      camera={{ position: [14, 11, 16], fov: 42, near: 0.1, far: 100 }}
-      dpr={[1, 1.5]}
-      fallback={<div className="renderer-fallback">Không thể khởi tạo bộ kết xuất GPU.</div>}
-      gl={async (parameters) => {
-        const canvas = parameters.canvas as HTMLCanvasElement;
-        try {
-          const renderer = new WebGPURenderer({ canvas, antialias: true, alpha: false });
-          await renderer.init();
-          renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-          renderer.toneMapping = THREE.ACESFilmicToneMapping;
-          renderer.toneMappingExposure = 1.0;
-          props.onBackendChange(renderer.coordinateSystem === THREE.WebGPUCoordinateSystem ? "webgpu" : "webgl2");
-          return renderer;
-        } catch {
-          const fb = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: "high-performance" });
-          fb.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-          fb.toneMapping = THREE.ACESFilmicToneMapping;
-          fb.toneMappingExposure = 1.0;
-          props.onBackendChange("webgl2");
-          return fb;
-        }
-      }}
-      onPointerMissed={() => props.onSelectEntity("overview")}
-    >
-      <Scene {...props} />
-    </Canvas>
-  );
-}
+export default IndustrialMegacity;

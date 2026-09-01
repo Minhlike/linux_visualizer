@@ -25,64 +25,78 @@ export type VisualEntityId =
   | "kernel"
   | "pipe";
 
-export type NarrativeBeat =
-  | "initial_overview"
-  | "orchestration"
-  | "io_pipeline"
-  | "final_overview";
+export type CameraBeat =
+  | "establish"
+  | "relationship"
+  | "flow"
+  | "mechanism"
+  | "recovery";
 
 export type Vector3Tuple = readonly [number, number, number];
 
 export interface CameraDirective {
   readonly entityId: VisualEntityId;
   readonly sequence: number;
-  readonly beat: NarrativeBeat;
+  readonly beat: CameraBeat;
   readonly position: Vector3Tuple;
   readonly target: Vector3Tuple;
 }
 
-/* Individual entity poses — used by auto mode */
-const entityPoses: Readonly<
-  Record<VisualEntityId, { position: Vector3Tuple; target: Vector3Tuple }>
-> = {
-  overview: { position: [14, 11, 16], target: [0, 1.2, -1] },
-  shell: { position: [-10, 7.5, 10], target: [-4.5, 1.6, -0.5] },
-  cat: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
-  echo: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
-  ls: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
-  ps: { position: [-7.5, 6, 9.5], target: [-1.5, 1.6, 0.8] },
-  grep: { position: [8.5, 6.5, 9.5], target: [2.2, 1.6, 0.8] },
-  filesystem: { position: [-8.5, 6.8, -9], target: [-2.2, 1.4, -3.8] },
-  terminal: { position: [8, 7, -8.5], target: [2, 1.4, -3.5] },
-  kernel: { position: [6.5, 7.5, -9], target: [0.5, 1.5, -2] },
-  pipe: { position: [5.2, 6.8, 11], target: [0.6, 1.8, 1] },
-};
+/* ── Shot Grammar ─────────────────────────────────────────────────
+   ESTABLISH   → wide overview of the entire plant
+   RELATIONSHIP → frame source + connector + destination together
+   FLOW        → medium shot following data flow path
+   MECHANISM   → close-up on active module machinery (used sparingly)
+   RECOVERY    → pull back to establish after completion/exit
+   ───────────────────────────────────────────────────────────────── */
 
-/* Relationship poses — camera sees 2–3 entities interacting (gentle mode) */
-const relationshipPoses = {
-  pipelineFlow: { position: [2, 10, 15], target: [0.5, 1.5, 0.8] },
-  shellSpawn: { position: [-1, 11, 14], target: [-1.5, 1.5, 0] },
-  fileAccess: { position: [-5, 9, 7], target: [-3, 1.2, -2] },
-  terminalIo: { position: [4, 9, 6], target: [1.5, 1.2, -2] },
+/* Plant-relative poses: the entire plant is compact [-4..3, 0, -3..3] */
+const plantOverview = { position: [10, 8.5, 12] as Vector3Tuple, target: [0, 1.2, 0] as Vector3Tuple };
+const plantWideAngle = { position: [-8, 9, 10] as Vector3Tuple, target: [0, 1.0, 0] as Vector3Tuple };
+
+/* Relationship shots: 2-3 modules + conduit visible */
+const relShots = {
+  shellToChild: { position: [-5, 6, 8] as Vector3Tuple, target: [-1, 1.2, 1] as Vector3Tuple },
+  fileToCat: { position: [-4, 6, 5] as Vector3Tuple, target: [-1.5, 1.2, 0] as Vector3Tuple },
+  pipelineFlow: { position: [2, 7, 10] as Vector3Tuple, target: [0.5, 1.5, 2] as Vector3Tuple },
+  grepToTerm: { position: [5, 6, 5] as Vector3Tuple, target: [2.5, 1.2, 0] as Vector3Tuple },
+  echoToFile: { position: [-4, 6, 5] as Vector3Tuple, target: [-1.5, 1.2, 0] as Vector3Tuple },
+  lsToTerm: { position: [3, 7, 7] as Vector3Tuple, target: [1, 1.2, 0] as Vector3Tuple },
+  psToTerm: { position: [3, 7, 7] as Vector3Tuple, target: [1, 1.2, 0] as Vector3Tuple },
+  terminalIo: { position: [5, 5, -5] as Vector3Tuple, target: [2.5, 1.2, -2] as Vector3Tuple },
 } as const;
 
-export function resolveNarrativeBeat(
+/* Flow shots: medium framing of data path */
+const flowShots = {
+  pipe: { position: [3, 5, 8] as Vector3Tuple, target: [0.5, 1.6, 2.5] as Vector3Tuple },
+  fileRead: { position: [-3, 5, 3] as Vector3Tuple, target: [-2, 1.2, -1] as Vector3Tuple },
+  termWrite: { position: [4, 5, -2] as Vector3Tuple, target: [3, 1.2, -3] as Vector3Tuple },
+} as const;
+
+/* Mechanism detail (used sparingly — only on exec/fork) */
+const mechShots: Readonly<Partial<Record<VisualEntityId, { position: Vector3Tuple; target: Vector3Tuple }>>> = {
+  shell: { position: [-5.5, 4, 3] as Vector3Tuple, target: [-4, 1.5, 0] as Vector3Tuple },
+  cat: { position: [-2, 4, 5.5] as Vector3Tuple, target: [-1.5, 1.5, 2.5] as Vector3Tuple },
+  grep: { position: [3, 4, 5.5] as Vector3Tuple, target: [2.5, 1.5, 2.5] as Vector3Tuple },
+  kernel: { position: [2, 5, -1] as Vector3Tuple, target: [0, 2, 0] as Vector3Tuple },
+};
+
+export function resolveCameraBeat(
   stage: string,
   sequence: number,
   totalFrames: number,
-): NarrativeBeat {
-  if (sequence <= 1) return "initial_overview";
-  if (totalFrames > 0 && sequence >= totalFrames) return "final_overview";
-  if (stage === "shell" || stage === "pipe_creation" || stage === "fork") {
-    return "orchestration";
-  }
-  if (stage === "pipe_io" || stage === "file_io" || stage === "terminal_io" || stage === "exec") {
-    return "io_pipeline";
-  }
-  if (stage === "exit" || stage === "wait") {
-    return "final_overview";
-  }
-  return "orchestration";
+): CameraBeat {
+  if (sequence <= 1) return "establish";
+  if (totalFrames > 0 && sequence >= totalFrames) return "recovery";
+  if (stage === "exit" || stage === "wait") return "recovery";
+
+  if (stage === "fork" || stage === "exec") return "mechanism";
+  if (stage === "pipe_creation" || stage === "file_descriptor_redirection") return "relationship";
+  if (stage === "shell") return "establish";
+
+  if (stage === "pipe_io" || stage === "file_io" || stage === "terminal_io") return "flow";
+
+  return "relationship";
 }
 
 export function resolveCameraDirective(
@@ -92,62 +106,99 @@ export function resolveCameraDirective(
   totalFrames = 0,
   mode: CameraFollowMode = "gentle",
 ): CameraDirective {
-  const beat = resolveNarrativeBeat(stage, sequence, totalFrames);
+  const beat = resolveCameraBeat(stage, sequence, totalFrames);
 
+  /* Free mode: no camera changes */
+  if (mode === "free") {
+    return { entityId: "overview", sequence, beat, ...plantOverview };
+  }
+
+  /* Resolve which entity is primary focus */
   let entityId: VisualEntityId = "overview";
-  let pose = entityPoses.overview;
+  if (stage === "pipe_io" || semanticNodeIds.some((id) => id.startsWith("pipe:"))) {
+    entityId = "pipe";
+  } else if (semanticNodeIds.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc"))) {
+    entityId = "filesystem";
+  } else if (semanticNodeIds.some((id) => id.includes("tty") || id.includes("terminal"))) {
+    entityId = "terminal";
+  } else if (semanticNodeIds.some((id) => id.includes("grep"))) {
+    entityId = "grep";
+  } else if (semanticNodeIds.some((id) => id.includes("echo"))) {
+    entityId = "echo";
+  } else if (semanticNodeIds.some((id) => id.includes("ls"))) {
+    entityId = "ls";
+  } else if (semanticNodeIds.some((id) => id.includes("ps"))) {
+    entityId = "ps";
+  } else if (semanticNodeIds.some((id) => id.includes("cat"))) {
+    entityId = "cat";
+  } else if (semanticNodeIds.some((id) => id.includes("shell"))) {
+    entityId = "shell";
+  }
+
+  /* Resolve camera pose based on beat + entity */
+  let pose = plantOverview;
 
   if (mode === "gentle") {
     switch (beat) {
-      case "initial_overview":
-      case "final_overview":
+      case "establish":
+        pose = plantOverview;
         entityId = "overview";
-        pose = entityPoses.overview;
         break;
-      case "orchestration":
-        entityId = "shell";
-        pose = relationshipPoses.shellSpawn;
+
+      case "relationship":
+        if (entityId === "pipe") pose = relShots.pipelineFlow;
+        else if (entityId === "filesystem") pose = relShots.fileToCat;
+        else if (entityId === "terminal") pose = relShots.terminalIo;
+        else if (entityId === "echo") pose = relShots.echoToFile;
+        else if (entityId === "ls") pose = relShots.lsToTerm;
+        else if (entityId === "ps") pose = relShots.psToTerm;
+        else if (entityId === "grep") pose = relShots.grepToTerm;
+        else pose = relShots.shellToChild;
         break;
-      case "io_pipeline":
-        if (stage === "pipe_io" || semanticNodeIds.some((id) => id.startsWith("pipe:"))) {
-          entityId = "pipe";
-          pose = relationshipPoses.pipelineFlow;
-        } else if (semanticNodeIds.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc"))) {
-          entityId = "filesystem";
-          pose = relationshipPoses.fileAccess;
-        } else if (semanticNodeIds.some((id) => id.includes("tty") || id.includes("terminal"))) {
-          entityId = "terminal";
-          pose = relationshipPoses.terminalIo;
-        } else {
-          entityId = "kernel";
-          pose = relationshipPoses.pipelineFlow;
-        }
+
+      case "flow":
+        if (entityId === "pipe") pose = flowShots.pipe;
+        else if (entityId === "filesystem") pose = flowShots.fileRead;
+        else if (entityId === "terminal") pose = flowShots.termWrite;
+        else pose = relShots.pipelineFlow;
+        break;
+
+      case "mechanism":
+        pose = mechShots[entityId] ?? relShots.shellToChild;
+        break;
+
+      case "recovery":
+        entityId = "overview";
+        pose = plantWideAngle;
         break;
     }
   } else {
-    if (stage === "pipe_io" || semanticNodeIds.some((id) => id.startsWith("pipe:"))) {
-      entityId = "pipe";
-    } else if (semanticNodeIds.some((id) => id.startsWith("file:") || id.includes("dir") || id.includes("proc"))) {
-      entityId = "filesystem";
-    } else if (semanticNodeIds.some((id) => id.includes("tty") || id.includes("terminal"))) {
-      entityId = "terminal";
-    } else if (semanticNodeIds.some((id) => id.includes("grep"))) {
-      entityId = "grep";
-    } else if (semanticNodeIds.some((id) => id.includes("echo"))) {
-      entityId = "echo";
-    } else if (semanticNodeIds.some((id) => id.includes("ls"))) {
-      entityId = "ls";
-    } else if (semanticNodeIds.some((id) => id.includes("ps"))) {
-      entityId = "ps";
-    } else if (semanticNodeIds.some((id) => id.includes("cat"))) {
-      entityId = "cat";
-    } else if (semanticNodeIds.some((id) => id.includes("shell"))) {
-      entityId = "shell";
-    } else {
-      entityId = beat === "final_overview" || beat === "initial_overview" ? "overview" : "kernel";
+    /* Auto mode: tighter framing per entity */
+    switch (beat) {
+      case "establish":
+      case "recovery":
+        entityId = "overview";
+        pose = plantOverview;
+        break;
+
+      default:
+        if (entityId === "pipe") pose = flowShots.pipe;
+        else if (entityId === "filesystem") pose = relShots.fileToCat;
+        else if (entityId === "terminal") pose = relShots.terminalIo;
+        else if (entityId === "grep") pose = relShots.grepToTerm;
+        else if (entityId === "echo") pose = relShots.echoToFile;
+        else if (entityId === "shell") pose = mechShots.shell ?? relShots.shellToChild;
+        else if (entityId === "cat") pose = mechShots.cat ?? relShots.fileToCat;
+        else if (entityId === "ls") pose = relShots.lsToTerm;
+        else if (entityId === "ps") pose = relShots.psToTerm;
+        else pose = plantOverview;
+        break;
     }
-    pose = entityPoses[entityId] ?? entityPoses.overview;
   }
 
   return { entityId, sequence, beat, ...pose };
 }
+
+/* Backward compat re-exports */
+export type NarrativeBeat = CameraBeat;
+export const resolveNarrativeBeat = resolveCameraBeat;
